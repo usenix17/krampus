@@ -31,6 +31,7 @@ const Rules = () => {
     rule_type: 'BINARY',
     policy: 'BLOCKLIST',
     custom_message: '',
+    comment: '',
   });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -55,7 +56,7 @@ const Rules = () => {
       await apiClient.post('/api/rules', formData);
       setSuccess('Rule created successfully!');
       setOpenDialog(false);
-      setFormData({ identifier: '', rule_type: 'BINARY', policy: 'BLOCKLIST', custom_message: '' });
+      setFormData({ identifier: '', rule_type: 'BINARY', policy: 'BLOCKLIST', custom_message: '', comment: '' });
       fetchRules();
       setTimeout(() => setSuccess(''), 3000);
     } catch (error) {
@@ -117,9 +118,14 @@ const Rules = () => {
                           color={rule.policy === 'BLOCKLIST' ? 'error' : 'success'}
                         />
                       </Box>
+                      {rule.comment && (
+                        <Typography variant="body2" sx={{ mt: 1, fontWeight: 500 }}>
+                          {rule.comment}
+                        </Typography>
+                      )}
                       {rule.custom_message && (
                         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                          {rule.custom_message}
+                          Block message: {rule.custom_message}
                         </Typography>
                       )}
                       <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
@@ -176,12 +182,21 @@ const Rules = () => {
           </TextField>
           <TextField
             fullWidth
+            label="Comment (optional)"
+            value={formData.comment}
+            onChange={(e) => setFormData({ ...formData, comment: e.target.value })}
+            margin="normal"
+            helperText="Internal note to identify what application this rule is for"
+          />
+          <TextField
+            fullWidth
             label="Custom Message (optional)"
             value={formData.custom_message}
             onChange={(e) => setFormData({ ...formData, custom_message: e.target.value })}
             margin="normal"
             multiline
             rows={3}
+            helperText="Message shown to users when a binary is blocked"
           />
         </DialogContent>
         <DialogActions>

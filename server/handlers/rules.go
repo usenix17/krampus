@@ -19,7 +19,7 @@ func ListRules(c *gin.Context) {
 
 	query := `
 		SELECT r.id, r.identifier, r.policy, r.rule_type, r.custom_message,
-		       r.created_by, r.proposal_id, r.created_at
+		       r.comment, r.created_by, r.proposal_id, r.created_at
 		FROM rules r
 		WHERE 1=1
 	`
@@ -49,7 +49,7 @@ func ListRules(c *gin.Context) {
 		var r models.Rule
 		err := rows.Scan(
 			&r.ID, &r.Identifier, &r.Policy, &r.RuleType, &r.CustomMessage,
-			&r.CreatedBy, &r.ProposalID, &r.CreatedAt,
+			&r.Comment, &r.CreatedBy, &r.ProposalID, &r.CreatedAt,
 		)
 		if err != nil {
 			log.Printf("Failed to scan rule: %v", err)
@@ -71,10 +71,10 @@ func GetRule(c *gin.Context) {
 
 	var r models.Rule
 	err = database.DB.QueryRow(
-		`SELECT id, identifier, policy, rule_type, custom_message, created_by, proposal_id, created_at
+		`SELECT id, identifier, policy, rule_type, custom_message, comment, created_by, proposal_id, created_at
 		 FROM rules WHERE id = ?`,
 		id,
-	).Scan(&r.ID, &r.Identifier, &r.Policy, &r.RuleType, &r.CustomMessage, &r.CreatedBy, &r.ProposalID, &r.CreatedAt)
+	).Scan(&r.ID, &r.Identifier, &r.Policy, &r.RuleType, &r.CustomMessage, &r.Comment, &r.CreatedBy, &r.ProposalID, &r.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Rule not found"})
@@ -102,6 +102,7 @@ func CreateRule(c *gin.Context) {
 		RuleType      string  `json:"rule_type" binding:"required"`
 		Policy        string  `json:"policy" binding:"required"`
 		CustomMessage *string `json:"custom_message"`
+		Comment       *string `json:"comment"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -117,9 +118,9 @@ func CreateRule(c *gin.Context) {
 
 	// Create rule
 	result, err := database.DB.Exec(
-		`INSERT INTO rules (identifier, policy, rule_type, custom_message, created_by)
-		 VALUES (?, ?, ?, ?, ?)`,
-		input.Identifier, input.Policy, input.RuleType, input.CustomMessage, userID,
+		`INSERT INTO rules (identifier, policy, rule_type, custom_message, comment, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		input.Identifier, input.Policy, input.RuleType, input.CustomMessage, input.Comment, userID,
 	)
 	if err != nil {
 		log.Printf("Failed to create rule: %v", err)

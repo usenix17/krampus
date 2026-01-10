@@ -130,6 +130,12 @@ func RunMigrations() error {
 		}
 	}
 
+	// Add comment column to rules table if it doesn't exist
+	if err := addColumnIfNotExists("rules", "comment", "TEXT"); err != nil {
+		log.Printf("Failed to add comment column to rules: %v", err)
+		return err
+	}
+
 	log.Println("All migrations completed successfully")
 	return nil
 }

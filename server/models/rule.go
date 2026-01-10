@@ -10,6 +10,7 @@ type Rule struct {
 	Policy        string     `json:"policy"` // "ALLOWLIST" or "BLOCKLIST"
 	RuleType      string     `json:"rule_type"` // "BINARY", "CERTIFICATE", "SIGNINGID", "TEAMID", "CDHASH"
 	CustomMessage *string    `json:"custom_message,omitempty"`
+	Comment       *string    `json:"comment,omitempty"` // Internal comment for identifying the application
 	CreatedBy     *int64     `json:"created_by,omitempty"`
 	ProposalID    *int64     `json:"proposal_id,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
