@@ -47,7 +47,7 @@ const Login = () => {
   const features = [
     { icon: <HowToVoteIcon />, text: 'Vote on binary proposals' },
     { icon: <RuleIcon />, text: 'Manage Santa rules' },
-    { icon: <ComputerIcon />, text: 'Register machines and generate plists' },
+    { icon: <ComputerIcon />, text: 'Register machines and deploy configurations' },
     { icon: <VisibilityIcon />, text: 'View execution events' },
   ];
 
