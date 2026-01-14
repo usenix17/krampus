@@ -42,6 +42,17 @@ const Proposals = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [highlightHash, setHighlightHash] = useState('');
+  const [voteThreshold, setVoteThreshold] = useState(3); // Default to 3
+
+  const fetchConfig = async () => {
+    try {
+      const response = await apiClient.get('/api/config');
+      setVoteThreshold(response.data.vote_threshold || 3);
+    } catch (error) {
+      console.error('Failed to fetch config:', error);
+      // Keep default threshold of 3
+    }
+  };
 
   const fetchProposals = async () => {
     try {
@@ -56,6 +67,7 @@ const Proposals = () => {
   };
 
   useEffect(() => {
+    fetchConfig();
     fetchProposals();
 
     // Check for hash and machine query parameters from Santa block notification
@@ -238,19 +250,19 @@ const Proposals = () => {
                         Votes:
                       </Typography>
                       <Box sx={{ mb: 1 }}>
-                        <Typography variant="caption">Allowlist: {proposal.allowlist_votes}</Typography>
+                        <Typography variant="caption">Allowlist: {proposal.allowlist_votes}/{voteThreshold}</Typography>
                         <LinearProgress
                           variant="determinate"
-                          value={(proposal.allowlist_votes / 3) * 100}
+                          value={(proposal.allowlist_votes / voteThreshold) * 100}
                           sx={{ height: 8, borderRadius: 1, backgroundColor: '#e0e0e0' }}
                           color="success"
                         />
                       </Box>
                       <Box>
-                        <Typography variant="caption">Blocklist: {proposal.blocklist_votes}</Typography>
+                        <Typography variant="caption">Blocklist: {proposal.blocklist_votes}/{voteThreshold}</Typography>
                         <LinearProgress
                           variant="determinate"
-                          value={(proposal.blocklist_votes / 3) * 100}
+                          value={(proposal.blocklist_votes / voteThreshold) * 100}
                           sx={{ height: 8, borderRadius: 1, backgroundColor: '#e0e0e0' }}
                           color="error"
                         />

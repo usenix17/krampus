@@ -88,6 +88,9 @@ func main() {
 	// Health check endpoint (public)
 	router.GET("/ping", handlers.Health)
 
+	// Public config endpoint
+	router.GET("/api/config", handlers.GetPublicConfig)
+
 	// Authentication routes (public)
 	authGroup := router.Group("/auth")
 	{
