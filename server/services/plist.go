@@ -47,7 +47,7 @@ func GeneratePlist(machineID, clientMode, syncBaseURL, machineOwner string, uplo
 	<key>BannedBlockMessage</key>
 	<string>This application has been blocked by your security policy. Click below to request access.</string>
 	<key>EventDetailURL</key>
-	<string>%s/proposals?hash=%%file_sha%%&amp;machine=%%machine_id%%</string>
+	<string>%s/proposals?hash=%%file_identifier%%&amp;machine=%%machine_id%%</string>
 	<key>EventDetailText</key>
 	<string>Request Access</string>
 </dict>
@@ -129,7 +129,7 @@ func GenerateMobileConfig(machineID, clientMode, syncBaseURL, organizationName, 
 			<key>BannedBlockMessage</key>
 			<string>This application has been blocked by your security policy. Click below to request access.</string>
 			<key>EventDetailURL</key>
-			<string>%s/proposals?hash=%%file_sha%%&amp;machine=%%machine_id%%</string>
+			<string>%s/proposals?hash=%%file_identifier%%&amp;machine=%%machine_id%%</string>
 			<key>EventDetailText</key>
 			<string>Request Access</string>
 		</dict>
