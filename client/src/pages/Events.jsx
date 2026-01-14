@@ -66,9 +66,20 @@ const Events = () => {
     }
   };
 
-  const handleCreateRule = (hash) => {
-    // Navigate to proposals page with hash pre-filled
-    navigate(`/proposals?hash=${hash}`);
+  const handleCreateRule = (event) => {
+    // Navigate to proposals page with hash and bundle info pre-filled
+    const params = new URLSearchParams({
+      hash: event.file_hash
+    });
+
+    // Add bundle name or bundle ID as comment if available
+    if (event.bundle_name) {
+      params.append('comment', event.bundle_name);
+    } else if (event.bundle_id) {
+      params.append('comment', event.bundle_id);
+    }
+
+    navigate(`/proposals?${params.toString()}`);
   };
 
   return (
@@ -151,7 +162,7 @@ const Events = () => {
                     <IconButton
                       size="small"
                       color="primary"
-                      onClick={() => handleCreateRule(event.file_hash)}
+                      onClick={() => handleCreateRule(event)}
                     >
                       <AddCircleIcon />
                     </IconButton>

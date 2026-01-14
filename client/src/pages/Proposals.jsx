@@ -62,6 +62,7 @@ const Proposals = () => {
     const params = new URLSearchParams(location.search);
     const hash = params.get('hash');
     const machine = params.get('machine');
+    const comment = params.get('comment');
 
     if (hash) {
       setHighlightHash(hash.toLowerCase());
@@ -87,11 +88,20 @@ const Proposals = () => {
             }
 
             // No proposal exists - pre-fill the form and open dialog
+            let customMessage = '';
+            if (comment && machine) {
+              customMessage = `${comment} (requested from ${machine})`;
+            } else if (comment) {
+              customMessage = comment;
+            } else if (machine) {
+              customMessage = `Requested from ${machine}`;
+            }
+
             setFormData({
               identifier: hash,
               rule_type: ruleType,
               proposed_policy: 'ALLOWLIST',
-              custom_message: machine ? `Requested from ${machine}` : '',
+              custom_message: customMessage,
             });
             setOpenDialog(true);
             setError('No proposal found for this binary. Please create one to request access.');

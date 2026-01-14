@@ -171,8 +171,9 @@ func FinalizeProposal(proposalID int64, policy string) error {
 	}
 
 	// Create rule from proposal
+	// Use custom_message as the comment to identify the application
 	_, err = tx.Exec(
-		`INSERT INTO rules (identifier, policy, rule_type, custom_message, created_by, proposal_id)
+		`INSERT INTO rules (identifier, policy, rule_type, comment, created_by, proposal_id)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		proposal.Identifier, policy, proposal.RuleType,
 		proposal.CustomMessage, proposal.CreatedBy, proposalID,
