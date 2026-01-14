@@ -75,10 +75,21 @@ const Proposals = () => {
           );
 
           if (!existingProposal) {
+            // Detect identifier type
+            // SHA256 hashes are 64 hex characters
+            // Bundle IDs typically look like: com.company.app
+            const isSHA256 = /^[a-fA-F0-9]{64}$/.test(hash);
+            const isBundleID = /^[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)+$/.test(hash);
+
+            let ruleType = 'BINARY'; // default
+            if (isBundleID && !isSHA256) {
+              ruleType = 'SIGNINGID'; // Bundle ID
+            }
+
             // No proposal exists - pre-fill the form and open dialog
             setFormData({
               identifier: hash,
-              rule_type: 'BINARY',
+              rule_type: ruleType,
               proposed_policy: 'ALLOWLIST',
               custom_message: machine ? `Requested from ${machine}` : '',
             });
