@@ -20,7 +20,7 @@ A full-featured Santa sync server with OIDC authentication, user voting system f
 - **Material-UI Web Portal**: Modern React-based interface for managing all aspects of the server
 - **Voting System**: Users can vote to allowlist or blocklist binaries with configurable threshold
 - **Role-Based Access Control**: Admin and user roles with different permissions
-- **Machine Management**: Register Santa clients, generate plist configurations, and delete machines
+- **Machine Management**: Register Santa clients, generate mobileconfig profiles, and delete machines
 - **Event Tracking**: View execution events from all enrolled machines
 - **Program Analytics**: Aggregate view of all executed binaries with metadata
 - **Santa Sync Protocol**: Full implementation of the Santa sync protocol (preflight, event upload, rule download, postflight)
@@ -34,7 +34,7 @@ A full-featured Santa sync server with OIDC authentication, user voting system f
 - **Framework**: Gin web framework
 - **Database**: SQLite with comprehensive schema
 - **Authentication**: OIDC (HS256/RS256) + JWT tokens with httpOnly cookies
-- **Services**: OIDC, JWT, Voting, Plist generation, Santa sync protocol
+- **Services**: OIDC, JWT, Voting, Mobileconfig generation, Santa sync protocol
 - **Middleware**: Auth validation, admin role checking, CORS
 - **Static Files**: Embedded React frontend via Go embed
 
@@ -166,7 +166,7 @@ A full-featured Santa sync server with OIDC authentication, user voting system f
 - `GET /api/machines` - List all enrolled machines
 - `GET /api/machines/:id` - Get machine details
 - `POST /api/machines` - Register new machine
-- `POST /api/machines/:id/plist` - Generate plist configuration
+- `POST /api/machines/:id/mobileconfig` - Generate mobileconfig profile
 - `DELETE /api/machines/:id` - Admin: Delete machine
 
 ### Events
@@ -211,7 +211,7 @@ Access the Material-UI web portal at `http://localhost:8080` after starting the 
 ### Machines
 - View all enrolled Santa clients
 - Register new machines
-- Generate and download plist configurations
+- Generate and download mobileconfig profiles
 - Admin: Delete machines
 
 ### Events
@@ -265,16 +265,16 @@ curl -X POST http://localhost:8080/api/machines \
   }'
 ```
 
-### Generate Plist
+### Generate Mobileconfig
 ```bash
-curl -X POST http://localhost:8080/api/machines/MACHINE123/plist \
+curl -X POST http://localhost:8080/api/machines/MACHINE123/mobileconfig \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "client_mode": "LOCKDOWN",
     "upload_interval": 600
   }' \
-  --output MACHINE123.plist
+  --output MACHINE123.mobileconfig
 ```
 
 ## Voting System
@@ -294,15 +294,103 @@ The voting system allows users to collectively decide on binary allowlist/blockl
 
 ## Santa Client Configuration
 
-After registering a machine and generating a plist or mobileconfig:
+### Prerequisites
 
-1. Download the generated configuration file
-2. **For plist**: Copy to Santa client: `/Library/Preferences/com.northpolesec.santa.plist`
-3. **For mobileconfig**: Double-click to install the profile (requires admin privileges)
-4. Restart Santa: `sudo launchctl stop com.northpolesec.santa && sudo launchctl start com.northpolesec.santa`
-5. Santa will sync with your server using the configured endpoints
+1. **Install Santa** from NorthPole Security (Google's Santa was sunset in Feb 2025):
+   ```bash
+   # Download latest Santa release from NorthPole Security
+   # https://github.com/northpolesec/santa/releases
 
-**Note**: NorthPole Security maintains Santa after Google's sunset. Visit [https://github.com/northpolesec/santa](https://github.com/northpolesec/santa) for installation.
+   # Or using Homebrew (if available)
+   brew install --cask santa
+   ```
+
+2. **Verify Santa is running**:
+   ```bash
+   sudo santactl status
+   ```
+
+### Deploy Configuration via Mobileconfig (Recommended)
+
+Mobileconfig profiles provide the easiest deployment method and automatically configure Santa:
+
+1. **Register machine** in the Krampus web portal (Machines page)
+   - Click "Register Machine"
+   - Enter a unique Machine ID (e.g., hostname or serial number)
+   - Optionally provide serial number and other metadata
+
+2. **Generate mobileconfig** for the machine
+   - Click "Download Config" on the machine card
+   - Configure client mode:
+     - **MONITOR**: Logs blocks but allows execution (testing/audit)
+     - **LOCKDOWN**: Enforces blocks (production)
+   - Set sync interval (default: 600 seconds)
+   - Download the `.mobileconfig` file
+
+3. **Install the profile** on the target Mac:
+   ```bash
+   # Double-click the .mobileconfig file, or:
+   sudo /usr/bin/profiles install -path /path/to/MACHINE123.mobileconfig
+   ```
+
+   - This will prompt for admin credentials
+   - The profile configures Santa with your server URL and settings
+
+4. **Verify configuration**:
+   ```bash
+   sudo santactl status
+   # Should show:
+   # - Sync server URL pointing to your Krampus server
+   # - Client mode (MONITOR or LOCKDOWN)
+   # - Last sync time
+   ```
+
+5. **Trigger initial sync**:
+   ```bash
+   sudo santactl sync
+   ```
+
+### What the Mobileconfig Configures
+
+The generated mobileconfig automatically sets:
+- **SyncBaseURL**: Your Krampus server URL (HTTPS enforced)
+- **ClientMode**: MONITOR (1) or LOCKDOWN (2)
+- **MachineID**: Unique identifier for this client
+- **FullSyncInterval**: How often to sync with server
+- **EventDetailURL**: URL for "Request Access" button when binaries are blocked
+- **EnableAllEventUpload**: Upload all execution events to server
+- **EnableBundles**: Support for bundle-based rules
+
+### Verifying Santa Sync
+
+After installation, check Santa is communicating with your server:
+
+```bash
+# Check Santa status
+sudo santactl status
+
+# Check recent sync logs
+log show --predicate 'subsystem == "com.northpolesec.santa"' --last 5m
+
+# Force a sync
+sudo santactl sync
+```
+
+You should see the machine appear in the Krampus web portal under "Machines" with updated sync timestamps.
+
+### Removing the Configuration
+
+To remove the Krampus configuration profile:
+
+```bash
+# List installed profiles
+sudo /usr/bin/profiles list
+
+# Remove the Santa configuration profile
+sudo /usr/bin/profiles remove -identifier com.northpolesec.santa.config.<UUID>
+```
+
+**Note**: NorthPole Security maintains Santa after Google's sunset in February 2025. Visit [https://github.com/northpolesec/santa](https://github.com/northpolesec/santa) for installation and documentation.
 
 ## Database Schema
 
@@ -327,7 +415,7 @@ krampus/
 │   ├── models/                 # Data models
 │   ├── handlers/               # HTTP handlers (auth, proposals, rules, etc.)
 │   ├── middleware/             # Auth and admin middleware
-│   ├── services/               # Business logic (OIDC, JWT, voting, plist)
+│   ├── services/               # Business logic (OIDC, JWT, voting, mobileconfig)
 │   └── static/                 # Embedded frontend build artifacts
 ├── client/
 │   ├── src/
