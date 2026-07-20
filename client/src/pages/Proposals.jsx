@@ -43,6 +43,9 @@ const Proposals = () => {
   const [success, setSuccess] = useState('');
   const [highlightHash, setHighlightHash] = useState('');
   const [voteThreshold, setVoteThreshold] = useState(3); // Default to 3
+  // Identifiers available for the binary a proposal is being created from,
+  // keyed by rule type. Lets the Rule Type dropdown auto-fill the identifier.
+  const [identifierOptions, setIdentifierOptions] = useState({});
 
   const fetchConfig = async () => {
     try {
@@ -75,6 +78,9 @@ const Proposals = () => {
     const hash = params.get('hash');
     const machine = params.get('machine');
     const comment = params.get('comment');
+    const certSha256 = params.get('cert_sha256');
+    const signingId = params.get('signing_id');
+    const teamId = params.get('team_id');
 
     if (hash) {
       setHighlightHash(hash.toLowerCase());
@@ -94,10 +100,20 @@ const Proposals = () => {
             const isSHA256 = /^[a-fA-F0-9]{64}$/.test(hash);
             const isBundleID = /^[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)+$/.test(hash);
 
+            // Map each rule type to the identifier this event can offer, so the
+            // Rule Type dropdown can auto-fill the matching identifier.
             let ruleType = 'BINARY'; // default
+            const idOptions = {};
             if (isBundleID && !isSHA256) {
-              ruleType = 'SIGNINGID'; // Bundle ID
+              ruleType = 'SIGNINGID'; // hash is actually a bundle/signing id
+              idOptions.SIGNINGID = hash;
+            } else {
+              idOptions.BINARY = hash;
             }
+            if (certSha256) idOptions.CERTIFICATE = certSha256;
+            if (signingId) idOptions.SIGNINGID = signingId;
+            if (teamId) idOptions.TEAMID = teamId;
+            setIdentifierOptions(idOptions);
 
             // No proposal exists - pre-fill the form and open dialog
             let customMessage = '';
@@ -110,7 +126,7 @@ const Proposals = () => {
             }
 
             setFormData({
-              identifier: hash,
+              identifier: idOptions[ruleType] || hash,
               rule_type: ruleType,
               proposed_policy: 'ALLOWLIST',
               custom_message: customMessage,
@@ -160,10 +176,11 @@ const Proposals = () => {
       await apiClient.post('/api/proposals', formData);
       setSuccess('Proposal created successfully!');
       setOpenDialog(false);
+      setIdentifierOptions({});
       setFormData({
         identifier: '',
         rule_type: 'BINARY',
-        proposed_policy: 'BLOCKLIST',
+        proposed_policy: 'ALLOWLIST',
         custom_message: '',
       });
       fetchProposals();
@@ -172,6 +189,31 @@ const Proposals = () => {
       setError(error.response?.data?.error || 'Failed to create proposal');
       setTimeout(() => setError(''), 5000);
     }
+  };
+
+  // When the rule type changes and we came from a specific binary, swap the
+  // identifier to the one that matches the newly selected type. If we have no
+  // per-type identifiers (a blank manual proposal), keep whatever was typed.
+  const handleRuleTypeChange = (newType) => {
+    setFormData((prev) => {
+      const hasOptions = Object.keys(identifierOptions).length > 0;
+      return {
+        ...prev,
+        rule_type: newType,
+        identifier: hasOptions ? (identifierOptions[newType] || '') : prev.identifier,
+      };
+    });
+  };
+
+  const openBlankProposal = () => {
+    setIdentifierOptions({});
+    setFormData({
+      identifier: '',
+      rule_type: 'BINARY',
+      proposed_policy: 'ALLOWLIST',
+      custom_message: '',
+    });
+    setOpenDialog(true);
   };
 
   const getStatusColor = (status) => {
@@ -198,7 +240,7 @@ const Proposals = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => setOpenDialog(true)}
+            onClick={openBlankProposal}
           >
             New Proposal
           </Button>
@@ -323,18 +365,16 @@ const Proposals = () => {
         <DialogContent>
           <TextField
             fullWidth
-            label="Identifier (SHA256 hash, cert hash, etc.)"
-            value={formData.identifier}
-            onChange={(e) => setFormData({ ...formData, identifier: e.target.value })}
-            margin="normal"
-          />
-          <TextField
-            fullWidth
             select
             label="Rule Type"
             value={formData.rule_type}
-            onChange={(e) => setFormData({ ...formData, rule_type: e.target.value })}
+            onChange={(e) => handleRuleTypeChange(e.target.value)}
             margin="normal"
+            helperText={
+              Object.keys(identifierOptions).length > 0
+                ? 'Identifier auto-fills to match the selected rule type'
+                : ''
+            }
           >
             <MenuItem value="BINARY">Binary</MenuItem>
             <MenuItem value="CERTIFICATE">Certificate</MenuItem>
@@ -342,6 +382,18 @@ const Proposals = () => {
             <MenuItem value="TEAMID">Team ID</MenuItem>
             <MenuItem value="CDHASH">CD Hash</MenuItem>
           </TextField>
+          <TextField
+            fullWidth
+            label="Identifier (SHA256 hash, cert hash, etc.)"
+            value={formData.identifier}
+            onChange={(e) => setFormData({ ...formData, identifier: e.target.value })}
+            margin="normal"
+            helperText={
+              Object.keys(identifierOptions).length > 0 && !identifierOptions[formData.rule_type]
+                ? 'This event has no identifier for the selected type -- enter one manually'
+                : ''
+            }
+          />
           <TextField
             fullWidth
             select

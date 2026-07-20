@@ -88,10 +88,14 @@ const Events = () => {
   };
 
   const handleCreateRule = (event) => {
-    // Navigate to proposals page with hash and bundle info pre-filled
+    // Navigate to proposals page with every identifier this event carries so
+    // the proposal form can switch rule type and auto-fill the right one.
     const params = new URLSearchParams({
       hash: event.file_hash
     });
+    if (event.cert_sha256) params.append('cert_sha256', event.cert_sha256);
+    if (event.signing_id) params.append('signing_id', event.signing_id);
+    if (event.team_id) params.append('team_id', event.team_id);
 
     // Add bundle name or bundle ID as comment if available
     if (event.bundle_name) {
