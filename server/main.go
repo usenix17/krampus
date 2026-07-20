@@ -163,8 +163,14 @@ func main() {
 		}
 	}
 
-	// Santa sync protocol endpoints (machine authentication would go here)
-	santaGroup := router.Group("", middleware.Decompress())
+	// Santa sync protocol endpoints. Protected by a shared sync key (when
+	// configured) and a body-size limit to bound unauthenticated uploads.
+	const maxSantaBody = 10 << 20 // 10 MiB
+	santaGroup := router.Group("",
+		middleware.BodyLimitMiddleware(maxSantaBody),
+		middleware.SantaAuthMiddleware(),
+		middleware.Decompress(),
+	)
 	{
 		santaGroup.POST("/preflight/:machine_id", handlers.Preflight)
 		santaGroup.POST("/eventupload/:machine_id", handlers.EventUpload)

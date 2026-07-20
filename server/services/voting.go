@@ -170,11 +170,17 @@ func FinalizeProposal(proposalID int64, policy string) error {
 		return fmt.Errorf("failed to update proposal: %w", err)
 	}
 
-	// Create rule from proposal
-	// Use custom_message as the comment to identify the application
+	// Create rule from proposal (upsert to respect the unique
+	// (identifier, rule_type) constraint on re-approval).
+	// Use custom_message as the comment to identify the application.
 	_, err = tx.Exec(
 		`INSERT INTO rules (identifier, policy, rule_type, comment, created_by, proposal_id)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(identifier, rule_type) DO UPDATE SET
+		   policy = excluded.policy,
+		   comment = COALESCE(excluded.comment, rules.comment),
+		   created_by = excluded.created_by,
+		   proposal_id = excluded.proposal_id`,
 		proposal.Identifier, policy, proposal.RuleType,
 		proposal.CustomMessage, proposal.CreatedBy, proposalID,
 	)

@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"krampus/server/config"
 	"krampus/server/database"
 	"krampus/server/models"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,17 +99,18 @@ func Preflight(c *gin.Context) {
 		}
 	}
 
-	// Return sync configuration
+	// Return sync configuration. The desired client mode is operator-controlled
+	// via SANTA_CLIENT_MODE rather than hardcoded.
 	c.JSON(http.StatusOK, gin.H{
-		"client_mode":               "LOCKDOWN",
-		"batch_size":                100,
-		"upload_logs_url":           "",
-		"clean_sync":                false,
-		"enable_bundles":            true,
-		"enable_transitive_rules":   false,
-		"blocked_path_regex":        "",
-		"allowed_path_regex":        "",
-		"enable_all_event_upload":   false,
+		"client_mode":             config.AppConfig.SantaClientMode,
+		"batch_size":              100,
+		"upload_logs_url":         "",
+		"clean_sync":              false,
+		"enable_bundles":          true,
+		"enable_transitive_rules": false,
+		"blocked_path_regex":      "",
+		"allowed_path_regex":      "",
+		"enable_all_event_upload": false,
 	})
 }
 
@@ -121,18 +124,13 @@ func EventUpload(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
-		// If JSON parsing fails, it's likely protobuf format
-		log.Printf("EventUpload: Received non-JSON data from %s (likely protobuf)", machineID)
-		log.Printf("EventUpload: Content-Type=%s, Content-Encoding=%s",
-			c.GetHeader("Content-Type"), c.GetHeader("Content-Encoding"))
-
-		// Log warning about protobuf not being fully supported yet
-		log.Printf("WARNING: Protobuf event upload is not yet supported. Events from %s are not being stored.", machineID)
-		log.Printf("To see events in Krampus, please reconfigure Santa with EventLogType=json:")
-		log.Printf("  1. Download a new mobileconfig from the Krampus web UI")
-		log.Printf("  2. Remove the old Santa configuration profile")
-		log.Printf("  3. Install the new mobileconfig")
-		log.Printf("  4. Restart Santa: sudo launchctl kickstart -k system/com.northpolesec.santa.daemon")
+		// Non-JSON body is almost certainly protobuf. Decoding protobuf event
+		// uploads is not yet implemented, so these events are acknowledged but
+		// not stored. Reconfigure Santa with EventLogType=json (redownload the
+		// mobileconfig from the Krampus UI) to capture events until then.
+		log.Printf("WARNING: EventUpload from %s is non-JSON (Content-Type=%s, Content-Encoding=%s); "+
+			"protobuf decoding is not implemented, events not stored. Set EventLogType=json in Santa.",
+			machineID, c.GetHeader("Content-Type"), c.GetHeader("Content-Encoding"))
 
 		// Return success anyway - Santa needs a 200 response to continue syncing
 		c.JSON(http.StatusOK, gin.H{
@@ -185,11 +183,16 @@ func RuleDownload(c *gin.Context) {
 		// Cursor is optional, ignore error
 	}
 
-	// Parse cursor (if provided, it's the last rule ID)
+	// The cursor is the id of the last rule sent in the previous batch. It is
+	// emitted (and echoed back) as a string so it round-trips cleanly.
 	var startID int64 = 0
 	if input.Cursor != "" {
-		// In a production system, you might want to properly parse/validate the cursor
-		// For now, we'll use a simple approach
+		parsed, err := strconv.ParseInt(input.Cursor, 10, 64)
+		if err != nil {
+			log.Printf("RuleDownload: invalid cursor %q from %s, starting from 0", input.Cursor, machineID)
+		} else {
+			startID = parsed
+		}
 	}
 
 	// Fetch rules with pagination
@@ -229,9 +232,10 @@ func RuleDownload(c *gin.Context) {
 		"rules": santaRules,
 	}
 
-	// If we got a full batch, there might be more rules
+	// If we got a full batch, there might be more rules. Emit the cursor as a
+	// string so it matches the type we parse on the way back in.
 	if len(santaRules) == batchSize {
-		response["cursor"] = lastID
+		response["cursor"] = strconv.FormatInt(lastID, 10)
 	}
 
 	// Update last sync time

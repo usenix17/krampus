@@ -33,6 +33,16 @@ const (
 	RuleTypeCDHash      RuleType = "CDHASH"
 )
 
+// IsValidRuleType reports whether s is a recognized Santa rule type.
+func IsValidRuleType(s string) bool {
+	switch RuleType(s) {
+	case RuleTypeBinary, RuleTypeCertificate, RuleTypeSigningID, RuleTypeTeamID, RuleTypeCDHash:
+		return true
+	default:
+		return false
+	}
+}
+
 // Santa sync protocol rule format
 type SantaRule struct {
 	Identifier  string  `json:"identifier"`

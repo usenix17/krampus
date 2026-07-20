@@ -116,10 +116,22 @@ func CreateRule(c *gin.Context) {
 		return
 	}
 
-	// Create rule
+	// Validate rule type
+	if !models.IsValidRuleType(input.RuleType) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid rule type"})
+		return
+	}
+
+	// Upsert: one rule per (identifier, rule_type) so repeated one-click
+	// allowlisting is idempotent rather than creating duplicates.
 	result, err := database.DB.Exec(
 		`INSERT INTO rules (identifier, policy, rule_type, custom_message, comment, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(identifier, rule_type) DO UPDATE SET
+		   policy = excluded.policy,
+		   custom_message = excluded.custom_message,
+		   comment = COALESCE(excluded.comment, rules.comment),
+		   created_by = excluded.created_by`,
 		input.Identifier, input.Policy, input.RuleType, input.CustomMessage, input.Comment, userID,
 	)
 	if err != nil {

@@ -92,6 +92,7 @@ func ListPrograms(c *gin.Context) {
 	            bundle_id,
 	            bundle_name,
 	            cert_cn,
+	            cert_sha256,
 	            signing_id,
 	            team_id,
 	            COUNT(*) as execution_count,
@@ -116,6 +117,7 @@ func ListPrograms(c *gin.Context) {
 		BundleID       *string `json:"bundle_id"`
 		BundleName     *string `json:"bundle_name"`
 		CertCN         *string `json:"cert_cn"`
+		CertSHA256     *string `json:"cert_sha256"`
 		SigningID      *string `json:"signing_id"`
 		TeamID         *string `json:"team_id"`
 		ExecutionCount int     `json:"execution_count"`
@@ -129,7 +131,7 @@ func ListPrograms(c *gin.Context) {
 		var p Program
 		err := rows.Scan(
 			&p.FileHash, &p.FilePath, &p.BundleID,
-			&p.BundleName, &p.CertCN, &p.SigningID, &p.TeamID,
+			&p.BundleName, &p.CertCN, &p.CertSHA256, &p.SigningID, &p.TeamID,
 			&p.ExecutionCount, &p.AllowCount, &p.BlockCount, &p.LastSeen,
 		)
 		if err != nil {

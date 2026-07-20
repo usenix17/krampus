@@ -16,17 +16,38 @@ import {
   MenuItem,
   IconButton,
   Tooltip,
+  Button,
+  Stack,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
 import { getEvents } from '../api/events';
+import { createRule } from '../api/rules';
+import { useAuth } from '../contexts/AuthContext';
 
 const Events = () => {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [events, setEvents] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
   const [filter, setFilter] = useState('');
+  const [toast, setToast] = useState({ open: false, severity: 'success', message: '' });
+
+  const handleAllowlist = async (identifier, ruleType, comment) => {
+    try {
+      await createRule({ identifier, rule_type: ruleType, policy: 'ALLOWLIST', comment: comment || '' });
+      setToast({ open: true, severity: 'success', message: `Allowlisted ${ruleType}` });
+    } catch (error) {
+      setToast({
+        open: true,
+        severity: 'error',
+        message: error.response?.data?.error || 'Failed to allowlist',
+      });
+    }
+  };
 
   const loadEvents = async () => {
     try {
@@ -158,15 +179,37 @@ const Events = () => {
                   )}
                 </TableCell>
                 <TableCell>
-                  <Tooltip title="Create rule for this binary">
-                    <IconButton
-                      size="small"
-                      color="primary"
-                      onClick={() => handleCreateRule(event)}
-                    >
-                      <AddCircleIcon />
-                    </IconButton>
-                  </Tooltip>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Tooltip title="Propose a rule for this binary">
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        onClick={() => handleCreateRule(event)}
+                      >
+                        <AddCircleIcon />
+                      </IconButton>
+                    </Tooltip>
+                    {isAdmin() && event.team_id && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="success"
+                        onClick={() => handleAllowlist(event.team_id, 'TEAMID', event.bundle_name || event.file_path)}
+                      >
+                        Team ID
+                      </Button>
+                    )}
+                    {isAdmin() && event.cert_sha256 && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="success"
+                        onClick={() => handleAllowlist(event.cert_sha256, 'CERTIFICATE', event.cert_cn || event.bundle_name)}
+                      >
+                        Cert
+                      </Button>
+                    )}
+                  </Stack>
                 </TableCell>
               </TableRow>
             ))}
@@ -182,6 +225,17 @@ const Events = () => {
           onRowsPerPageChange={handleChangeRowsPerPage}
         />
       </TableContainer>
+
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={4000}
+        onClose={() => setToast({ ...toast, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={toast.severity} onClose={() => setToast({ ...toast, open: false })}>
+          {toast.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Box,
+  Button,
   Paper,
   Table,
   TableBody,
@@ -10,11 +11,18 @@ import {
   TableRow,
   Typography,
   Chip,
+  Stack,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import { getPrograms } from '../api/events';
+import { createRule } from '../api/rules';
+import { useAuth } from '../contexts/AuthContext';
 
 const Programs = () => {
+  const { isAdmin } = useAuth();
   const [programs, setPrograms] = useState([]);
+  const [toast, setToast] = useState({ open: false, severity: 'success', message: '' });
 
   useEffect(() => {
     loadPrograms();
@@ -26,6 +34,20 @@ const Programs = () => {
       setPrograms(response.data.programs || []);
     } catch (error) {
       console.error('Failed to load programs:', error);
+    }
+  };
+
+  const handleAllowlist = async (identifier, ruleType, comment) => {
+    try {
+      await createRule({ identifier, rule_type: ruleType, policy: 'ALLOWLIST', comment: comment || '' });
+      setToast({ open: true, severity: 'success', message: `Allowlisted ${ruleType} ${identifier.substring(0, 20)}...` });
+      loadPrograms();
+    } catch (error) {
+      setToast({
+        open: true,
+        severity: 'error',
+        message: error.response?.data?.error || 'Failed to allowlist',
+      });
     }
   };
 
@@ -45,6 +67,7 @@ const Programs = () => {
               <TableCell>Executions</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Last Seen</TableCell>
+              {isAdmin() && <TableCell>Allowlist</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -102,6 +125,32 @@ const Programs = () => {
                 <TableCell>
                   {new Date(program.last_seen).toLocaleString()}
                 </TableCell>
+                {isAdmin() && (
+                  <TableCell>
+                    <Stack direction="row" spacing={1}>
+                      {program.team_id && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="success"
+                          onClick={() => handleAllowlist(program.team_id, 'TEAMID', program.bundle_name || program.file_path)}
+                        >
+                          Team ID
+                        </Button>
+                      )}
+                      {program.cert_sha256 && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="success"
+                          onClick={() => handleAllowlist(program.cert_sha256, 'CERTIFICATE', program.cert_cn || program.bundle_name)}
+                        >
+                          Cert
+                        </Button>
+                      )}
+                    </Stack>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>
@@ -115,6 +164,17 @@ const Programs = () => {
           </Typography>
         </Box>
       )}
+
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={4000}
+        onClose={() => setToast({ ...toast, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={toast.severity} onClose={() => setToast({ ...toast, open: false })}>
+          {toast.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

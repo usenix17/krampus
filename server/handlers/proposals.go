@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -136,14 +137,7 @@ func CreateProposal(c *gin.Context) {
 	}
 
 	// Validate rule type
-	validRuleTypes := map[string]bool{
-		string(models.RuleTypeBinary):      true,
-		string(models.RuleTypeCertificate): true,
-		string(models.RuleTypeSigningID):   true,
-		string(models.RuleTypeTeamID):      true,
-		string(models.RuleTypeCDHash):      true,
-	}
-	if !validRuleTypes[input.RuleType] {
+	if !models.IsValidRuleType(input.RuleType) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid rule type"})
 		return
 	}
@@ -168,6 +162,22 @@ func CreateProposal(c *gin.Context) {
 	}
 
 	proposalID, _ := result.LastInsertId()
+
+	// Fire a Discord alert for the new proposal (no-op if unconfigured; async).
+	username, _ := middleware.GetUsername(c)
+	var creatorEmail *string
+	if email := c.GetString("email"); email != "" {
+		creatorEmail = &email
+	}
+	services.NotifyNewProposal(models.Proposal{
+		ID:             proposalID,
+		Identifier:     input.Identifier,
+		RuleType:       input.RuleType,
+		ProposedPolicy: input.ProposedPolicy,
+		CustomMessage:  input.CustomMessage,
+		CreatedBy:      userID,
+		CreatedAt:      time.Now(),
+	}, username, creatorEmail)
 
 	c.JSON(http.StatusCreated, gin.H{
 		"id":      proposalID,

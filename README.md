@@ -114,7 +114,32 @@ A full-featured Santa sync server with OIDC authentication, user voting system f
 | `ADMIN_EMAILS` | Admin emails (comma-separated) | - |
 | `SYNC_BASE_URL` | Base URL for Santa clients | `http://localhost:8080` |
 | `SERVER_PORT` | Server port | `8080` |
+| `CORS_ALLOWED_ORIGINS` | Origins allowed to send credentialed requests (comma-separated). Empty = credential-less wildcard | - |
+| `SANTA_SYNC_KEY` | Shared secret required on sync endpoints. Empty = unauthenticated. Sent as `Authorization: Bearer <key>` or `X-Santa-Key: <key>` | - |
+| `SANTA_CLIENT_MODE` | Desired client mode pushed to agents at preflight (`MONITOR` or `LOCKDOWN`) | `LOCKDOWN` |
+| `DISCORD_WEBHOOK_URL` | Discord webhook for new-proposal alerts. Empty = disabled. Sourced from Vault via VSO in production | - |
 | `DATABASE_PATH` | SQLite database file path | `./database/krampus.db` |
+
+> **Note:** In `release` mode (`GIN_MODE=release`) the server refuses to start if `JWT_SECRET` is left at its default value.
+
+### Discord Alerts
+
+When `DISCORD_WEBHOOK_URL` is set, Krampus posts an embed to Discord whenever a
+new rule proposal is created. The alert includes the identifier, rule type,
+proposed policy, requester, and links back to the Proposals page. Delivery is
+best-effort and asynchronous -- it never blocks or fails proposal creation.
+
+In production the webhook is stored in Vault and replicated into the cluster by
+the Vault Secrets Operator (VSO); mount it as the `DISCORD_WEBHOOK_URL`
+environment variable on the deployment.
+
+### One-Click Allowlisting
+
+Admins can allowlist a **Team ID** or **Certificate** directly from the
+**Programs** and **Events** pages using the inline allowlist buttons -- no need
+to copy identifiers into the New Rule dialog. These create an `ALLOWLIST` rule
+immediately (bypassing voting) and are idempotent: re-allowlisting the same
+identifier updates the existing rule rather than creating a duplicate.
 
 ### OIDC Provider Setup
 

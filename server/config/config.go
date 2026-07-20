@@ -28,6 +28,16 @@ type Config struct {
 	SyncBaseURL   string
 	ServerPort    string
 
+	// CORS Configuration
+	CORSAllowedOrigins []string
+
+	// Santa Sync Configuration
+	SantaSyncKey    string // Shared secret required on sync endpoints (empty = unauthenticated)
+	SantaClientMode string // Desired client mode pushed to agents: MONITOR or LOCKDOWN
+
+	// Discord Configuration
+	DiscordWebhookURL string // Webhook for new-proposal alerts (empty = disabled)
+
 	// Database Configuration
 	DatabasePath string
 }
@@ -48,7 +58,7 @@ func Load() *Config {
 		OIDCScopes:       strings.Split(getEnv("OIDC_SCOPES", "openid,profile,email"), ","),
 
 		// JWT
-		JWTSecret: getEnv("JWT_SECRET", "change-me-in-production"),
+		JWTSecret: getEnv("JWT_SECRET", defaultJWTSecret),
 		JWTExpiry: parseDuration(getEnv("JWT_EXPIRY", "24h")),
 
 		// Application
@@ -56,6 +66,16 @@ func Load() *Config {
 		AdminEmails:   parseList(getEnv("ADMIN_EMAILS", "")),
 		SyncBaseURL:   getEnv("SYNC_BASE_URL", "http://localhost:8080"),
 		ServerPort:    getEnv("SERVER_PORT", "8080"),
+
+		// CORS
+		CORSAllowedOrigins: parseList(getEnv("CORS_ALLOWED_ORIGINS", "")),
+
+		// Santa Sync
+		SantaSyncKey:    getEnv("SANTA_SYNC_KEY", ""),
+		SantaClientMode: strings.ToUpper(getEnv("SANTA_CLIENT_MODE", "LOCKDOWN")),
+
+		// Discord
+		DiscordWebhookURL: getEnv("DISCORD_WEBHOOK_URL", ""),
 
 		// Database
 		DatabasePath: getEnv("DATABASE_PATH", "./database/krampus.db"),
@@ -71,13 +91,26 @@ func Load() *Config {
 	if config.OIDCClientSecret == "" {
 		log.Println("WARNING: OIDC_CLIENT_SECRET not set - OIDC authentication will not work")
 	}
-	if config.JWTSecret == "change-me-in-production" {
+	if config.JWTSecret == defaultJWTSecret {
+		// Refuse to run with the default secret when Gin is in release mode.
+		if strings.EqualFold(os.Getenv("GIN_MODE"), "release") {
+			log.Fatal("FATAL: JWT_SECRET is set to the default value in release mode - refusing to start")
+		}
 		log.Println("WARNING: Using default JWT secret - change JWT_SECRET in production!")
+	}
+	if config.SantaSyncKey == "" {
+		log.Println("WARNING: SANTA_SYNC_KEY not set - Santa sync endpoints are UNAUTHENTICATED")
+	}
+	if config.SantaClientMode != "MONITOR" && config.SantaClientMode != "LOCKDOWN" {
+		log.Printf("WARNING: invalid SANTA_CLIENT_MODE %q, falling back to LOCKDOWN", config.SantaClientMode)
+		config.SantaClientMode = "LOCKDOWN"
 	}
 
 	AppConfig = config
 	return config
 }
+
+const defaultJWTSecret = "change-me-in-production"
 
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {

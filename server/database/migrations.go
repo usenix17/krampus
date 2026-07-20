@@ -136,6 +136,27 @@ func RunMigrations() error {
 		return err
 	}
 
+	// Collapse any pre-existing duplicate rules (keeping the newest) before
+	// enforcing uniqueness, otherwise the index creation would fail.
+	if _, err := DB.Exec(
+		`DELETE FROM rules
+		 WHERE id NOT IN (
+		   SELECT MAX(id) FROM rules GROUP BY identifier, rule_type
+		 );`,
+	); err != nil {
+		log.Printf("Failed to dedupe rules: %v", err)
+		return err
+	}
+
+	// Enforce one rule per (identifier, rule_type) so allowlisting is idempotent.
+	if _, err := DB.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_identifier_type
+		 ON rules(identifier, rule_type);`,
+	); err != nil {
+		log.Printf("Failed to create unique rule index: %v", err)
+		return err
+	}
+
 	log.Println("All migrations completed successfully")
 	return nil
 }
