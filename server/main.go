@@ -55,16 +55,6 @@ func main() {
 		log.Println("Embedded frontend assets loaded successfully")
 	}
 
-	// Serve vite.svg
-	router.GET("/vite.svg", func(c *gin.Context) {
-		data, err := staticFiles.ReadFile("static/vite.svg")
-		if err != nil {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		c.Data(http.StatusOK, "image/svg+xml", data)
-	})
-
 	// Serve krampus.svg
 	router.GET("/krampus.svg", func(c *gin.Context) {
 		data, err := staticFiles.ReadFile("static/krampus.svg")
