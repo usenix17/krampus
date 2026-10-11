@@ -114,14 +114,28 @@ const Login = () => {
               p: 4,
               width: '100%',
               borderRadius: 3,
+              // Fixed light glass panel over the gradient in both themes, so
+              // its text is pinned dark rather than following the theme mode.
               bgcolor: 'rgba(255, 255, 255, 0.95)',
+              color: 'rgba(0, 0, 0, 0.87)',
               backdropFilter: 'blur(10px)',
             }}
           >
-            <Typography component="h1" variant="h4" align="center" gutterBottom fontWeight="bold">
+            <Typography
+              component="h1"
+              variant="h4"
+              align="center"
+              gutterBottom
+              fontWeight="bold"
+              sx={{ color: 'rgba(0, 0, 0, 0.87)' }}
+            >
               Krampus Santa Sync
             </Typography>
-            <Typography variant="body1" align="center" color="text.secondary" sx={{ mb: 3 }}>
+            <Typography
+              variant="body1"
+              align="center"
+              sx={{ mb: 3, color: 'rgba(0, 0, 0, 0.6)' }}
+            >
               Collaborative binary allowlist/blocklist management
             </Typography>
 
@@ -151,7 +165,7 @@ const Login = () => {
             </Button>
 
             <Box sx={{ mt: 4 }}>
-              <Typography variant="subtitle2" color="text.secondary" fontWeight="bold" sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 2, color: 'rgba(0, 0, 0, 0.6)' }}>
                 Platform Features
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -165,6 +179,8 @@ const Login = () => {
                       justifyContent: 'flex-start',
                       py: 2.5,
                       px: 1,
+                      color: 'rgba(0, 0, 0, 0.87)',
+                      borderColor: 'rgba(0, 0, 0, 0.23)',
                       '& .MuiChip-icon': {
                         color: gradientStart,
                         ml: 1,
