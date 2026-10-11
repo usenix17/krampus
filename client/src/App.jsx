@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Proposals from './pages/Proposals';
 import Rules from './pages/Rules';
 import Machines from './pages/Machines';
+import MachineDetail from './pages/MachineDetail';
 import Events from './pages/Events';
 import Programs from './pages/Programs';
 import Users from './pages/Users';
@@ -76,6 +77,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Machines />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/machines/:id"
+              element={
+                <ProtectedRoute>
+                  <MachineDetail />
                 </ProtectedRoute>
               }
             />

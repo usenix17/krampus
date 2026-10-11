@@ -18,6 +18,9 @@ import {
   Alert,
   IconButton,
   InputAdornment,
+  List,
+  ListItem,
+  ListItemText,
   TablePagination,
   Skeleton,
 } from '@mui/material';
@@ -63,6 +66,7 @@ const Proposals = () => {
     custom_message: '',
   });
   const [voteThreshold, setVoteThreshold] = useState(3); // Default to 3
+  const [votesDialog, setVotesDialog] = useState({ open: false, loading: false, votes: [] });
   // Identifiers available for the binary a proposal is being created from,
   // keyed by rule type. Lets the Rule Type dropdown auto-fill the identifier.
   const [identifierOptions, setIdentifierOptions] = useState({});
@@ -169,6 +173,29 @@ const Proposals = () => {
       refresh();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to approve proposal');
+    }
+  };
+
+  // Load vote history on demand so cards stay cheap until the user asks.
+  const handleViewVotes = async (proposalId) => {
+    setVotesDialog({ open: true, loading: true, votes: [] });
+    try {
+      const response = await apiClient.get(`/api/proposals/${proposalId}/votes`);
+      setVotesDialog({ open: true, loading: false, votes: response.data?.votes || [] });
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to fetch votes');
+      setVotesDialog({ open: false, loading: false, votes: [] });
+    }
+  };
+
+  const handleReject = async (proposalId) => {
+    if (!window.confirm('Are you sure you want to reject this proposal?')) return;
+    try {
+      await apiClient.post(`/api/proposals/${proposalId}/reject`);
+      toast.success('Proposal rejected');
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to reject proposal');
     }
   };
 
@@ -337,6 +364,9 @@ const Proposals = () => {
                         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                           Created by {proposal.creator_username} on {formatDateTime(proposal.created_at)}
                         </Typography>
+                        <Button size="small" sx={{ mt: 1, px: 0 }} onClick={() => handleViewVotes(proposal.id)}>
+                          View votes
+                        </Button>
                       </Box>
                       <Box sx={{ ml: 2, minWidth: 200 }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -411,6 +441,18 @@ const Proposals = () => {
                               onClick={() => handleApprove(proposal.id, 'BLOCKLIST')}
                             >
                               Approve Block
+                            </Button>
+                          </Box>
+                        )}
+                        {isAdmin() && proposal.status === 'PENDING' && (
+                          <Box sx={{ mt: 1 }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="inherit"
+                              onClick={() => handleReject(proposal.id)}
+                            >
+                              Reject
                             </Button>
                           </Box>
                         )}
@@ -493,6 +535,45 @@ const Proposals = () => {
           <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
           <Button onClick={handleCreate} variant="contained">
             Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={votesDialog.open}
+        onClose={() => setVotesDialog({ open: false, loading: false, votes: [] })}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Vote History</DialogTitle>
+        <DialogContent>
+          {votesDialog.loading ? (
+            <Skeleton variant="rounded" height={120} />
+          ) : votesDialog.votes.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+              No votes yet
+            </Typography>
+          ) : (
+            <List dense>
+              {votesDialog.votes.map((vote, index) => (
+                <ListItem key={`${vote.username}-${index}`} disableGutters>
+                  <ListItemText
+                    primary={vote.username}
+                    secondary={formatDateTime(vote.created_at)}
+                  />
+                  <Chip
+                    label={vote.vote_type}
+                    size="small"
+                    color={vote.vote_type === 'BLOCKLIST' ? 'error' : 'success'}
+                  />
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setVotesDialog({ open: false, loading: false, votes: [] })}>
+            Close
           </Button>
         </DialogActions>
       </Dialog>

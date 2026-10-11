@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
   Button,
@@ -157,7 +158,15 @@ const Machines = () => {
               <Card>
                 <CardContent>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                    <Typography variant="h6">{machine.machine_id}</Typography>
+                    <Typography
+                      variant="h6"
+                      component={RouterLink}
+                      to={`/machines/${machine.id}`}
+                      aria-label={`view ${machine.hostname || machine.machine_id} details`}
+                      sx={{ color: 'inherit', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+                    >
+                      {machine.hostname || machine.machine_id}
+                    </Typography>
                     {isAdmin() && (
                       <IconButton
                         aria-label="delete machine"

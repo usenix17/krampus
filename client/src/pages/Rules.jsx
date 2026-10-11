@@ -17,6 +17,7 @@ import {
   Refresh as RefreshIcon,
   Delete as DeleteIcon,
   Download as DownloadIcon,
+  Edit as EditIcon,
 } from '@mui/icons-material';
 import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
@@ -57,6 +58,12 @@ const Rules = () => {
     custom_message: '',
     comment: '',
   });
+  const [editData, setEditData] = useState({
+    open: false,
+    id: null,
+    custom_message: '',
+    comment: '',
+  });
 
   const handleCreate = async () => {
     try {
@@ -77,6 +84,31 @@ const Rules = () => {
     const qs = params.toString();
     return `${apiBase}/api/rules/export${qs ? `?${qs}` : ''}`;
   }, [search]);
+
+  const openEdit = (rule) => {
+    setEditData({
+      open: true,
+      id: rule.id,
+      custom_message: rule.custom_message || '',
+      comment: rule.comment || '',
+    });
+  };
+
+  // Always send both fields: the API treats "" as clear and nil as preserve,
+  // so sending the edited values keeps the dialog's state authoritative.
+  const handleUpdate = async () => {
+    try {
+      await apiClient.put(`/api/rules/${editData.id}`, {
+        custom_message: editData.custom_message,
+        comment: editData.comment,
+      });
+      toast.success('Rule updated successfully!');
+      setEditData({ open: false, id: null, custom_message: '', comment: '' });
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update rule');
+    }
+  };
 
   const handleDelete = async (ruleId) => {
     if (!window.confirm('Are you sure you want to delete this rule?')) return;
@@ -142,14 +174,23 @@ const Rules = () => {
       label: 'Actions',
       align: 'right',
       render: (row) => (
-        <IconButton
-          aria-label="delete rule"
-          color="error"
-          size="small"
-          onClick={() => handleDelete(row.id)}
-        >
-          <DeleteIcon />
-        </IconButton>
+        <>
+          <IconButton
+            aria-label="edit rule"
+            size="small"
+            onClick={() => openEdit(row)}
+          >
+            <EditIcon />
+          </IconButton>
+          <IconButton
+            aria-label="delete rule"
+            color="error"
+            size="small"
+            onClick={() => handleDelete(row.id)}
+          >
+            <DeleteIcon />
+          </IconButton>
+        </>
       ),
     });
   }
@@ -258,6 +299,45 @@ const Rules = () => {
           <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
           <Button onClick={handleCreate} variant="contained">
             Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={editData.open}
+        onClose={() => setEditData({ open: false, id: null, custom_message: '', comment: '' })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Edit Rule</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="Comment"
+            value={editData.comment}
+            onChange={(e) => setEditData({ ...editData, comment: e.target.value })}
+            margin="normal"
+            helperText="Internal note to identify what application this rule is for"
+          />
+          <TextField
+            fullWidth
+            label="Custom Message"
+            value={editData.custom_message}
+            onChange={(e) => setEditData({ ...editData, custom_message: e.target.value })}
+            margin="normal"
+            multiline
+            rows={3}
+            helperText="Message shown to users when a binary is blocked"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setEditData({ open: false, id: null, custom_message: '', comment: '' })}
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleUpdate} variant="contained">
+            Save
           </Button>
         </DialogActions>
       </Dialog>

@@ -35,38 +35,47 @@ const DataTable = ({
   toolbarActions,
 }) => {
   const colSpan = columns.length;
+  // Hide the search field entirely when the caller omits a search handler, so
+  // endpoints without search do not render an inert input.
+  const showSearch = typeof onSearchChange === 'function';
 
   return (
     <Box>
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 2,
-          mb: 2,
-          flexWrap: 'wrap',
-        }}
-      >
-        <TextField
-          size="small"
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder={searchPlaceholder}
-          slotProps={{
-            input: {
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon fontSize="small" />
-                </InputAdornment>
-              ),
-            },
-            htmlInput: { 'aria-label': searchPlaceholder || 'search table' },
+      {(showSearch || toolbarActions) && (
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 2,
+            mb: 2,
+            flexWrap: 'wrap',
           }}
-          sx={{ minWidth: 240 }}
-        />
-        {toolbarActions && <Box>{toolbarActions}</Box>}
-      </Box>
+        >
+          {showSearch ? (
+            <TextField
+              size="small"
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder={searchPlaceholder}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon fontSize="small" />
+                    </InputAdornment>
+                  ),
+                },
+                htmlInput: { 'aria-label': searchPlaceholder || 'search table' },
+              }}
+              sx={{ minWidth: 240 }}
+            />
+          ) : (
+            <Box />
+          )}
+          {toolbarActions && <Box>{toolbarActions}</Box>}
+        </Box>
+      )}
 
       {error && (
         <Alert
