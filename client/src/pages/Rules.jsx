@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -12,7 +12,12 @@ import {
   MenuItem,
   IconButton,
 } from '@mui/material';
-import { Add as AddIcon, Refresh as RefreshIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon,
+  Refresh as RefreshIcon,
+  Delete as DeleteIcon,
+  Download as DownloadIcon,
+} from '@mui/icons-material';
 import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -59,6 +64,14 @@ const Rules = () => {
       toast.error(err.response?.data?.error || 'Failed to create rule');
     }
   };
+
+  // Mirror the live search onto the CSV export link.
+  const exportHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    const qs = params.toString();
+    return `/api/rules/export${qs ? `?${qs}` : ''}`;
+  }, [search]);
 
   const handleDelete = async (ruleId) => {
     if (!window.confirm('Are you sure you want to delete this rule?')) return;
@@ -169,6 +182,17 @@ const Rules = () => {
         search={search}
         onSearchChange={setSearch}
         searchPlaceholder="Search rules..."
+        toolbarActions={
+          <Button
+            component="a"
+            href={exportHref}
+            download
+            startIcon={<DownloadIcon />}
+            variant="outlined"
+          >
+            Export CSV
+          </Button>
+        }
       />
 
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
