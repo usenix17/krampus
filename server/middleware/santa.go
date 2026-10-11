@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/subtle"
 	"krampus/server/config"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -32,6 +33,10 @@ func ValidateMachineID() gin.HandlerFunc {
 //
 //	Authorization: Bearer <key>
 //	X-Santa-Key: <key>
+//
+// When SANTA_SYNC_ENFORCE is false (staged rollout), a missing or invalid key
+// is logged as a warning and the request is allowed through instead of
+// rejected, so clients can be migrated onto the key without breaking sync.
 func SantaAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := config.AppConfig.SantaSyncKey
@@ -49,9 +54,12 @@ func SantaAuthMiddleware() gin.HandlerFunc {
 
 		// Constant-time compare to avoid leaking the key via timing.
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(key)) != 1 {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid sync credentials"})
-			c.Abort()
-			return
+			if config.AppConfig.SantaSyncEnforce {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid sync credentials"})
+				c.Abort()
+				return
+			}
+			log.Printf("WARNING: sync request without valid key from %s (machine %s) - allowed, SANTA_SYNC_ENFORCE=false", c.ClientIP(), c.Param("machine_id"))
 		}
 
 		c.Next()
