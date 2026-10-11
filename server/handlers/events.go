@@ -13,8 +13,9 @@ import (
 )
 
 // buildEventsFilter assembles the WHERE clause and bound args shared by the
-// events list count and page queries. It covers the machine_id and decision
-// exact filters, an inclusive from/to date range on execution_time, and the
+// events list count and page queries. It covers the machine_id exact filter,
+// the decision prefix filter (ALLOW/BLOCK match ALLOW_BINARY et al; anything
+// else errors), an inclusive from/to date range on execution_time, and the
 // free-text search. Date bounds must be YYYY-MM-DD (anything else errors);
 // `to` is made inclusive via `< date(?, '+1 day')`. The returned clause
 // includes the leading " WHERE " or is empty.
@@ -26,9 +27,15 @@ func buildEventsFilter(c *gin.Context, p pageParams) (string, []any, error) {
 		conds = append(conds, "machine_id = ?")
 		args = append(args, machineID)
 	}
+	// Real agents send prefixed decisions (ALLOW_BINARY, BLOCK_BINARY), so
+	// prefix-match like stats.go. Restricting the parameter to the two
+	// canonical values keeps the GLOB pattern free of caller metacharacters.
 	if decision := c.Query("decision"); decision != "" {
-		conds = append(conds, "decision = ?")
-		args = append(args, decision)
+		if decision != "ALLOW" && decision != "BLOCK" {
+			return "", nil, errors.New("invalid decision, want ALLOW or BLOCK")
+		}
+		conds = append(conds, "decision GLOB ?")
+		args = append(args, decision+"*")
 	}
 	if from := c.Query("from"); from != "" {
 		if _, err := time.Parse("2006-01-02", from); err != nil {
@@ -154,8 +161,8 @@ func ListPrograms(c *gin.Context) {
 	            signing_id,
 	            team_id,
 	            COUNT(*) as execution_count,
-	            SUM(CASE WHEN decision = 'ALLOW' THEN 1 ELSE 0 END) as allow_count,
-	            SUM(CASE WHEN decision = 'BLOCK' THEN 1 ELSE 0 END) as block_count,
+	            SUM(CASE WHEN decision GLOB 'ALLOW*' THEN 1 ELSE 0 END) as allow_count,
+	            SUM(CASE WHEN decision GLOB 'BLOCK*' THEN 1 ELSE 0 END) as block_count,
 	            MAX(execution_time) as last_seen
 	          FROM events` + where + `
 	          GROUP BY file_hash

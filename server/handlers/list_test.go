@@ -346,3 +346,74 @@ func TestListProgramsPaginationSearch(t *testing.T) {
 		t.Fatalf("empty body=%s, want \"items\":[]", body)
 	}
 }
+
+// Real Santa agents report decisions like ALLOW_BINARY/BLOCK_BINARY, so the
+// decision filter must prefix-match while the UI keeps sending ALLOW/BLOCK.
+func TestListEventsDecisionPrefix(t *testing.T) {
+	initTestDB(t)
+	exec(t, `INSERT INTO machines (machine_id) VALUES ('m1')`)
+	exec(t, `INSERT INTO events (machine_id, file_hash, decision, execution_time)
+		VALUES ('m1', 'ha', 'ALLOW_BINARY', '2026-01-03 10:00:00')`)
+	exec(t, `INSERT INTO events (machine_id, file_hash, decision, execution_time)
+		VALUES ('m1', 'hb', 'BLOCK_BINARY', '2026-01-02 10:00:00')`)
+
+	code, body := doGet(t, ListEvents, "?decision=ALLOW")
+	if code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", code, body)
+	}
+	env := decodeEnvelope(t, body)
+	if env.Total != 1 {
+		t.Fatalf("decision=ALLOW total=%d, want 1 (ALLOW_BINARY row)", env.Total)
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(env.Items, &items); err != nil {
+		t.Fatalf("decode items: %v", err)
+	}
+	if len(items) != 1 || items[0]["file_hash"] != "ha" {
+		t.Fatalf("decision=ALLOW items=%v, want single ha", items)
+	}
+
+	_, body = doGet(t, ListEvents, "?decision=BLOCK")
+	env = decodeEnvelope(t, body)
+	if env.Total != 1 {
+		t.Fatalf("decision=BLOCK total=%d, want 1 (BLOCK_BINARY row)", env.Total)
+	}
+
+	// Anything but the two canonical values is rejected so the GLOB pattern
+	// parameter stays attacker-proof.
+	for _, junk := range []string{"EVIL*", "ALLOWANCE", "[A]LLOW"} {
+		code, body = doGet(t, ListEvents, "?decision="+junk)
+		if code != http.StatusBadRequest {
+			t.Fatalf("decision=%s status=%d body=%s, want 400", junk, code, body)
+		}
+	}
+}
+
+// Program allow/block aggregates must also count prefixed decisions.
+func TestListProgramsDecisionPrefixCounts(t *testing.T) {
+	initTestDB(t)
+	exec(t, `INSERT INTO machines (machine_id) VALUES ('m1')`)
+	exec(t, `INSERT INTO events (machine_id, file_hash, decision, execution_time)
+		VALUES ('m1', 'h1', 'ALLOW_BINARY', '2026-01-03 10:00:00')`)
+	exec(t, `INSERT INTO events (machine_id, file_hash, decision, execution_time)
+		VALUES ('m1', 'h1', 'BLOCK_BINARY', '2026-01-02 10:00:00')`)
+
+	code, body := doGet(t, ListPrograms, "")
+	if code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", code, body)
+	}
+	env := decodeEnvelope(t, body)
+	var items []map[string]any
+	if err := json.Unmarshal(env.Items, &items); err != nil {
+		t.Fatalf("decode items: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items=%v, want single h1 program", items)
+	}
+	if got := items[0]["allow_count"]; got != float64(1) {
+		t.Fatalf("allow_count=%v, want 1 (ALLOW_BINARY counted)", got)
+	}
+	if got := items[0]["block_count"]; got != float64(1) {
+		t.Fatalf("block_count=%v, want 1 (BLOCK_BINARY counted)", got)
+	}
+}

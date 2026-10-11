@@ -22,15 +22,12 @@ import usePagedQuery from '../hooks/usePagedQuery';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
 
+// Real agents send prefixed decisions (ALLOW_BINARY, BLOCK_BINARY), so
+// color by prefix rather than exact value.
 const getDecisionColor = (decision) => {
-  switch (decision) {
-    case 'ALLOW':
-      return 'success';
-    case 'BLOCK':
-      return 'error';
-    default:
-      return 'default';
-  }
+  if (decision?.startsWith('ALLOW')) return 'success';
+  if (decision?.startsWith('BLOCK')) return 'error';
+  return 'default';
 };
 
 const Events = () => {

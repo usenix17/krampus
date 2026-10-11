@@ -139,8 +139,8 @@ func ExportPrograms(c *gin.Context) {
 	            signing_id,
 	            team_id,
 	            COUNT(*) as execution_count,
-	            SUM(CASE WHEN decision = 'ALLOW' THEN 1 ELSE 0 END) as allow_count,
-	            SUM(CASE WHEN decision = 'BLOCK' THEN 1 ELSE 0 END) as block_count,
+	            SUM(CASE WHEN decision GLOB 'ALLOW*' THEN 1 ELSE 0 END) as allow_count,
+	            SUM(CASE WHEN decision GLOB 'BLOCK*' THEN 1 ELSE 0 END) as block_count,
 	            MAX(execution_time) as last_seen
 	          FROM events` + where + `
 	          GROUP BY file_hash
