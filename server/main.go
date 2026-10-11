@@ -155,6 +155,9 @@ func main() {
 			programsGroup.GET("/export", handlers.ExportPrograms)
 		}
 
+		// Stats (dashboard overview)
+		api.GET("/stats/overview", handlers.StatsOverview)
+
 		// Users (admin-only)
 		usersGroup := api.Group("/users")
 		usersGroup.Use(middleware.AdminMiddleware())
