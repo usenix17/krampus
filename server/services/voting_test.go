@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"krampus/server/config"
@@ -156,5 +157,75 @@ func TestCannotVoteOnFinalizedProposal(t *testing.T) {
 	}
 	if err := SubmitVote(2, 1, "ALLOWLIST"); err == nil {
 		t.Fatal("expected error voting on finalized proposal")
+	}
+}
+
+func TestRejectProposalMarksRejectedWithoutRule(t *testing.T) {
+	setupVotingTest(t, 3)
+	if err := RejectProposal(1); err != nil {
+		t.Fatalf("RejectProposal: %v", err)
+	}
+	var status string
+	var finalizedAt sql.NullString
+	// CAST sidesteps the driver's DATETIME->time.Time conversion so the
+	// assertion sees the raw stored text.
+	mustScan(t, `SELECT status, CAST(finalized_at AS TEXT) FROM proposals WHERE id=1`,
+		&status, &finalizedAt)
+	if status != "REJECTED" {
+		t.Fatalf("status=%q, want REJECTED", status)
+	}
+	if !finalizedAt.Valid {
+		t.Fatalf("finalized_at not set")
+	}
+	if !bareUTCRe.MatchString(finalizedAt.String) {
+		t.Fatalf("finalized_at=%q, want bare UTC YYYY-MM-DD HH:MM:SS", finalizedAt.String)
+	}
+	var n int
+	mustScan(t, `SELECT COUNT(*) FROM rules WHERE identifier='ABCDEF'`, &n)
+	if n != 0 {
+		t.Fatalf("rules=%d, want 0 (reject must not create a rule)", n)
+	}
+}
+
+// bareUTCRe matches the canonical bare-UTC datetime format used for
+// execution_time and finalized_at: no offset suffix, no sub-seconds.
+var bareUTCRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$`)
+
+func TestFinalizeStoresBareUTCFinalizedAt(t *testing.T) {
+	setupVotingTest(t, 3)
+	if err := FinalizeProposal(1, "ALLOWLIST"); err != nil {
+		t.Fatalf("FinalizeProposal: %v", err)
+	}
+	var finalizedAt sql.NullString
+	mustScan(t, `SELECT CAST(finalized_at AS TEXT) FROM proposals WHERE id=1`, &finalizedAt)
+	if !finalizedAt.Valid || !bareUTCRe.MatchString(finalizedAt.String) {
+		t.Fatalf("finalized_at=%v, want bare UTC YYYY-MM-DD HH:MM:SS", finalizedAt)
+	}
+}
+
+func TestRejectProposalTwiceErrors(t *testing.T) {
+	setupVotingTest(t, 3)
+	if err := RejectProposal(1); err != nil {
+		t.Fatalf("RejectProposal: %v", err)
+	}
+	if err := RejectProposal(1); err == nil {
+		t.Fatal("expected error rejecting an already-rejected proposal")
+	}
+}
+
+func TestRejectNonexistentProposalErrors(t *testing.T) {
+	setupVotingTest(t, 3)
+	if err := RejectProposal(999); err == nil {
+		t.Fatal("expected error rejecting a nonexistent proposal")
+	}
+}
+
+func TestCannotVoteOnRejectedProposal(t *testing.T) {
+	setupVotingTest(t, 3)
+	if err := RejectProposal(1); err != nil {
+		t.Fatalf("RejectProposal: %v", err)
+	}
+	if err := SubmitVote(1, 1, "ALLOWLIST"); err == nil {
+		t.Fatal("expected error voting on rejected proposal")
 	}
 }

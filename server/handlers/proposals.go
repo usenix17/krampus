@@ -275,6 +275,76 @@ func ApproveProposal(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Proposal approved successfully"})
 }
 
+// RejectProposal allows admin to reject a pending proposal without creating a rule
+func RejectProposal(c *gin.Context) {
+	proposalID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid proposal ID"})
+		return
+	}
+
+	if err := services.RejectProposal(proposalID); err != nil {
+		log.Printf("Failed to reject proposal: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Proposal rejected"})
+}
+
+// voteRecord is one row of a proposal's vote history.
+type voteRecord struct {
+	Username  string    `json:"username"`
+	VoteType  string    `json:"vote_type"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListProposalVotes returns the per-user vote history for a proposal.
+func ListProposalVotes(c *gin.Context) {
+	proposalID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid proposal ID"})
+		return
+	}
+
+	var exists int
+	err = database.DB.QueryRow(`SELECT 1 FROM proposals WHERE id = ?`, proposalID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Proposal not found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to fetch proposal: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch proposal"})
+		return
+	}
+
+	rows, err := database.DB.Query(
+		`SELECT v.vote_type, v.created_at, u.username
+		 FROM votes v JOIN users u ON u.id = v.user_id
+		 WHERE v.proposal_id = ? ORDER BY v.created_at`,
+		proposalID,
+	)
+	if err != nil {
+		log.Printf("Failed to query votes: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch votes"})
+		return
+	}
+	defer rows.Close()
+
+	votes := []voteRecord{}
+	for rows.Next() {
+		var v voteRecord
+		if err := rows.Scan(&v.VoteType, &v.CreatedAt, &v.Username); err != nil {
+			log.Printf("Failed to scan vote: %v", err)
+			continue
+		}
+		votes = append(votes, v)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"votes": votes})
+}
+
 // DeleteProposal deletes a proposal (creator or admin only)
 func DeleteProposal(c *gin.Context) {
 	userID, exists := middleware.GetUserID(c)

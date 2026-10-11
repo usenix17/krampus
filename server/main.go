@@ -111,10 +111,12 @@ func main() {
 			proposalsGroup.GET("/:id", handlers.GetProposal)
 			proposalsGroup.POST("", handlers.CreateProposal)
 			proposalsGroup.POST("/:id/vote", handlers.VoteOnProposal)
+			proposalsGroup.GET("/:id/votes", handlers.ListProposalVotes)
 			proposalsGroup.DELETE("/:id", handlers.DeleteProposal)
 
 			// Admin-only proposal routes
 			proposalsGroup.POST("/:id/approve", middleware.AdminMiddleware(), handlers.ApproveProposal)
+			proposalsGroup.POST("/:id/reject", middleware.AdminMiddleware(), handlers.RejectProposal)
 		}
 
 		// Rules
@@ -126,6 +128,7 @@ func main() {
 
 			// Admin-only rule routes
 			rulesGroup.POST("", middleware.AdminMiddleware(), handlers.CreateRule)
+			rulesGroup.PUT("/:id", middleware.AdminMiddleware(), handlers.UpdateRule)
 			rulesGroup.DELETE("/:id", middleware.AdminMiddleware(), handlers.DeleteRule)
 		}
 
@@ -134,6 +137,7 @@ func main() {
 		{
 			machinesGroup.GET("", handlers.ListMachines)
 			machinesGroup.GET("/:id", handlers.GetMachine)
+			machinesGroup.GET("/:id/events", handlers.ListMachineEvents)
 			machinesGroup.POST("", handlers.RegisterMachine)
 			machinesGroup.POST("/:id/mobileconfig", handlers.GenerateMobileConfig)
 

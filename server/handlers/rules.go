@@ -173,6 +173,70 @@ func CreateRule(c *gin.Context) {
 	})
 }
 
+// UpdateRule updates a rule's custom_message and/or comment in place (admin only)
+func UpdateRule(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid rule ID"})
+		return
+	}
+
+	var input struct {
+		CustomMessage *string `json:"custom_message"`
+		Comment       *string `json:"comment"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if input.CustomMessage == nil && input.Comment == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one of custom_message or comment is required"})
+		return
+	}
+
+	var sets []string
+	var args []any
+	if input.CustomMessage != nil {
+		sets = append(sets, "custom_message = ?")
+		args = append(args, *input.CustomMessage)
+	}
+	if input.Comment != nil {
+		sets = append(sets, "comment = ?")
+		args = append(args, *input.Comment)
+	}
+	args = append(args, id)
+
+	result, err := database.DB.Exec(
+		"UPDATE rules SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...,
+	)
+	if err != nil {
+		log.Printf("Failed to update rule: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update rule"})
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Rule not found"})
+		return
+	}
+
+	var r models.Rule
+	err = database.DB.QueryRow(
+		`SELECT id, identifier, policy, rule_type, custom_message, comment, created_by, proposal_id, created_at
+		 FROM rules WHERE id = ?`,
+		id,
+	).Scan(&r.ID, &r.Identifier, &r.Policy, &r.RuleType, &r.CustomMessage, &r.Comment, &r.CreatedBy, &r.ProposalID, &r.CreatedAt)
+	if err != nil {
+		log.Printf("Failed to fetch updated rule: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch updated rule"})
+		return
+	}
+
+	c.JSON(http.StatusOK, r)
+}
+
 // DeleteRule deletes a rule (admin only)
 func DeleteRule(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

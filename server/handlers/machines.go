@@ -77,6 +77,76 @@ func GetMachine(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
+// ListMachineEvents returns a paginated page of a single machine's events,
+// using the same :id semantics as GetMachine (the numeric machines.id).
+func ListMachineEvents(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid machine ID"})
+		return
+	}
+
+	var machineID string
+	err = database.DB.QueryRow(`SELECT machine_id FROM machines WHERE id = ?`, id).Scan(&machineID)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Machine not found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to fetch machine: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch machine"})
+		return
+	}
+
+	p := getPageParams(c)
+
+	var total int
+	if err := database.DB.QueryRow(
+		`SELECT COUNT(*) FROM events WHERE machine_id = ?`, machineID,
+	).Scan(&total); err != nil {
+		log.Printf("Failed to count machine events: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch events"})
+		return
+	}
+
+	rows, err := database.DB.Query(
+		`SELECT id, machine_id, file_hash, file_path, decision,
+		        executing_user, cert_sha256, cert_cn, bundle_id, bundle_name,
+		        bundle_path, signing_id, team_id, quarantine_data_url,
+		        quarantine_timestamp, execution_time
+		 FROM events WHERE machine_id = ?
+		 ORDER BY execution_time DESC LIMIT ? OFFSET ?`,
+		machineID, p.PerPage, p.Offset,
+	)
+	if err != nil {
+		log.Printf("Failed to query machine events: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch events"})
+		return
+	}
+	defer rows.Close()
+
+	events := []models.Event{}
+	for rows.Next() {
+		var event models.Event
+		err := rows.Scan(
+			&event.ID, &event.MachineID, &event.FileHash, &event.FilePath,
+			&event.Decision, &event.ExecutingUser, &event.CertSHA256,
+			&event.CertCN, &event.BundleID, &event.BundleName, &event.BundlePath,
+			&event.SigningID, &event.TeamID, &event.QuarantineDataURL,
+			&event.QuarantineTimestamp, &event.ExecutionTime,
+		)
+		if err != nil {
+			log.Printf("Failed to scan machine event: %v", err)
+			continue
+		}
+		events = append(events, event)
+	}
+
+	c.JSON(http.StatusOK, pageResponse{
+		Items: events, Total: total, Page: p.Page, PerPage: p.PerPage,
+	})
+}
+
 // RegisterMachine registers a new machine
 func RegisterMachine(c *gin.Context) {
 	var input struct {
