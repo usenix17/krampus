@@ -1,35 +1,43 @@
-# Krampus: review fixes + two features
+# Krampus: migrations, hardening, API + UI overhaul, protobuf
 
-## Features
-- [x] F1: One-click allowlist by cert/team ID from Programs & Events (admin, immediate)
-- [x] F2: Discord alert on new proposal (webhook URL from env `DISCORD_WEBHOOK_URL`)
+Plan: `docs/superpowers/plans/2026-10-10-krampus-improvements.md`
+Spec: `docs/superpowers/specs/2026-10-10-krampus-improvements-design.md`
 
-## Review fixes (1..11)
-- [x] 1: Authenticate Santa sync endpoints (shared `SANTA_SYNC_KEY`, enforced when set)
-- [x] 2: Fix CORS (reflect configured origins; only send credentials for allowed origin)
-- [x] 3: Refuse default JWT secret in release mode
-- [x] 4: Fix RuleDownload cursor pagination (parse + emit cursor consistently)
-- [x] 5: Deduplicate rules (UNIQUE(identifier, rule_type) + upsert)
-- [x] 6: Open SQLite with WAL + busy_timeout + foreign_keys=on
-- [x] 7: Make preflight client_mode configurable (`SANTA_CLIENT_MODE`), stop hardcoding
-- [~] 8: Protobuf event upload -- graceful handling + guidance. Full protobuf DECODE
-        is deferred: it needs Santa's sync protobuf schema + generated Go and is a
-        standalone task. Behavior now: acknowledge with 200, concise warning, doc note.
-- [x] 9: Body-size limit on Santa endpoints (10 MiB, anti-DoS)
-- [x] 10: Add Go unit tests (config, buildDSN, discord payload + POST, rule type)
-- [x] 11: Enforce FK cascades (covered by fix 6: `_foreign_keys=on`)
+## Phase 1: Migration system + bug/security fixes
+- [ ] T1: Versioned migration runner (schema_migrations, legacy adoption, 4 migrations)
+- [ ] T2: Decompress middleware rewrite (empty-body panic fix)
+- [ ] T3: Voted rules deliver custom_message to Santa + voting tests
+- [ ] T4: Config hardening (parseInt defaults, COOKIE_SECURE, STALE_MACHINE_HOURS)
+- [ ] T5: Cookie flags (SameSite/Secure) + logout revokes cookie session
+- [ ] T6: CORS wildcard must not reflect with credentials
+- [ ] T7: machine_id validation, RegisterMachine id, events count err, OIDC alg pin, dead code
 
-## Verify (all done)
-- [x] `go build ./server` -> exit 0
-- [x] `go test ./server/...` -> all packages ok
-- [x] `cd client && npm run build` -> built
-- [x] Runtime smoke test: 401 w/o key, 200 w/ key, client_mode=MONITOR from env
-- [x] Cursor: 150 rules -> page1=100+cursor, page2=50+no cursor (was: stuck at 100)
-- [x] Unique index rejects dup; handler upsert updates in place (1 row)
+## Phase 2: Backend API
+- [ ] T8: Pagination + search on rules/programs/proposals/users; event filters
+- [ ] T9: CSV export (events, programs, rules)
+- [ ] T10: Stats overview endpoint
+- [ ] T11: Reject proposal, vote history, rule edit, machine events
+
+## Phase 3: Frontend
+- [ ] T12: Shared infra (toast, PageHeader), theme + dark mode, CSS cleanup
+- [ ] T13: DataTable + convert pages to new API and MUI v7 Grid
+- [ ] T14: Events/Programs filters + export buttons + post-action refresh
+- [ ] T15: Dashboard analytics charts (@mui/x-charts)
+- [ ] T16: Machine detail page, vote history + reject UI, rule edit dialog
+- [ ] T17: Rebuild embedded frontend + end-to-end verification
+
+## Phase 4: Protobuf
+- [ ] T18: Protobuf event upload (research module, decode, shared store path)
+
+## Verify
+- [ ] go build/vet/test all green
+- [ ] npm run build clean
+- [ ] Migration proof against copy of real DB
+- [ ] Browser click-through
 
 ## Review section (results)
-- All 2 features + 10/11 bug fixes landed and verified. #8 (protobuf decode) is
-  intentionally partial with a documented reason.
-- New env vars: CORS_ALLOWED_ORIGINS, SANTA_SYNC_KEY, SANTA_CLIENT_MODE, DISCORD_WEBHOOK_URL.
-- Note: the embedded `server/static` assets were regenerated from `client/dist`,
-  so their hashed filenames changed in the diff.
+(to be filled at completion)
+
+## Prior work (completed earlier)
+- F1 one-click allowlist, F2 Discord alerts, review fixes 1-11 (protobuf decode
+  was the one deferred item; it is T18 above).
