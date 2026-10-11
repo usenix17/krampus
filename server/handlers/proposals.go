@@ -9,14 +9,49 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// ListProposals returns all proposals with optional filtering
+// buildProposalsFilter assembles the WHERE clause and bound args shared by
+// the proposals list count and page queries from the status and search
+// params. Columns are prefixed with the p alias used by both queries.
+func buildProposalsFilter(c *gin.Context, pg pageParams) (string, []any) {
+	var conds []string
+	var args []any
+
+	if status := c.Query("status"); status != "" {
+		conds = append(conds, "p.status = ?")
+		args = append(args, status)
+	}
+	if clause, sargs := searchClause(pg.Search,
+		"p.identifier", "p.custom_message"); clause != "" {
+		conds = append(conds, clause)
+		args = append(args, sargs...)
+	}
+
+	if len(conds) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+// ListProposals returns a paginated, searchable page of proposals enriched
+// with their creator's username and email.
 func ListProposals(c *gin.Context) {
-	status := c.Query("status") // Filter by status if provided
+	pg := getPageParams(c)
+	where, args := buildProposalsFilter(c, pg)
+
+	var total int
+	if err := database.DB.QueryRow(
+		"SELECT COUNT(*) FROM proposals p"+where, args...,
+	).Scan(&total); err != nil {
+		log.Printf("Failed to count proposals: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch proposals"})
+		return
+	}
 
 	query := `
 		SELECT p.id, p.identifier, p.rule_type, p.proposed_policy, p.custom_message,
@@ -24,20 +59,11 @@ func ListProposals(c *gin.Context) {
 		       p.created_at, p.finalized_at,
 		       u.username, u.email
 		FROM proposals p
-		JOIN users u ON p.created_by = u.id
-	`
+		JOIN users u ON p.created_by = u.id` + where +
+		" ORDER BY p.created_at DESC LIMIT ? OFFSET ?"
+	pageArgs := append(append([]any{}, args...), pg.PerPage, pg.Offset)
 
-	var rows *sql.Rows
-	var err error
-
-	if status != "" {
-		query += " WHERE p.status = ? ORDER BY p.created_at DESC"
-		rows, err = database.DB.Query(query, status)
-	} else {
-		query += " ORDER BY p.created_at DESC"
-		rows, err = database.DB.Query(query)
-	}
-
+	rows, err := database.DB.Query(query, pageArgs...)
 	if err != nil {
 		log.Printf("Failed to query proposals: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch proposals"})
@@ -61,7 +87,9 @@ func ListProposals(c *gin.Context) {
 		proposals = append(proposals, p)
 	}
 
-	c.JSON(http.StatusOK, proposals)
+	c.JSON(http.StatusOK, pageResponse{
+		Items: proposals, Total: total, Page: pg.Page, PerPage: pg.PerPage,
+	})
 }
 
 // GetProposal returns a single proposal by ID

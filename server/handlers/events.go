@@ -1,46 +1,90 @@
 package handlers
 
 import (
+	"errors"
 	"krampus/server/database"
 	"krampus/server/models"
 	"log"
 	"net/http"
-	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// ListEvents returns all execution events with pagination
-func ListEvents(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	offset := (page - 1) * limit
+// buildEventsFilter assembles the WHERE clause and bound args shared by the
+// events list count and page queries. It covers the machine_id and decision
+// exact filters, an inclusive from/to date range on execution_time, and the
+// free-text search. Date bounds must be YYYY-MM-DD (anything else errors);
+// `to` is made inclusive via `< date(?, '+1 day')`. The returned clause
+// includes the leading " WHERE " or is empty.
+func buildEventsFilter(c *gin.Context, p pageParams) (string, []any, error) {
+	var conds []string
+	var args []any
 
-	// Optional filters
-	machineID := c.Query("machine_id")
-	decision := c.Query("decision")
+	if machineID := c.Query("machine_id"); machineID != "" {
+		conds = append(conds, "machine_id = ?")
+		args = append(args, machineID)
+	}
+	if decision := c.Query("decision"); decision != "" {
+		conds = append(conds, "decision = ?")
+		args = append(args, decision)
+	}
+	if from := c.Query("from"); from != "" {
+		if _, err := time.Parse("2006-01-02", from); err != nil {
+			return "", nil, errors.New("invalid date, want YYYY-MM-DD")
+		}
+		conds = append(conds, "execution_time >= ?")
+		args = append(args, from)
+	}
+	if to := c.Query("to"); to != "" {
+		if _, err := time.Parse("2006-01-02", to); err != nil {
+			return "", nil, errors.New("invalid date, want YYYY-MM-DD")
+		}
+		conds = append(conds, "execution_time < date(?, '+1 day')")
+		args = append(args, to)
+	}
+	if clause, sargs := searchClause(p.Search,
+		"file_path", "file_hash", "bundle_name", "executing_user"); clause != "" {
+		conds = append(conds, clause)
+		args = append(args, sargs...)
+	}
+
+	if len(conds) == 0 {
+		return "", args, nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args, nil
+}
+
+// ListEvents returns a paginated, searchable, filterable page of events.
+func ListEvents(c *gin.Context) {
+	p := getPageParams(c)
+	where, args, err := buildEventsFilter(c, p)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var total int
+	if err := database.DB.QueryRow(
+		"SELECT COUNT(*) FROM events"+where, args...,
+	).Scan(&total); err != nil {
+		log.Printf("Failed to count events: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch events"})
+		return
+	}
 
 	query := `SELECT id, machine_id, file_hash, file_path, decision,
 	                 executing_user, cert_sha256, cert_cn, bundle_id, bundle_name,
 	                 bundle_path, signing_id, team_id, quarantine_data_url,
 	                 quarantine_timestamp, execution_time
-	          FROM events WHERE 1=1`
-	args := []interface{}{}
+	          FROM events` + where +
+		" ORDER BY execution_time DESC LIMIT ? OFFSET ?"
+	pageArgs := append(append([]any{}, args...), p.PerPage, p.Offset)
 
-	if machineID != "" {
-		query += " AND machine_id = ?"
-		args = append(args, machineID)
-	}
-	if decision != "" {
-		query += " AND decision = ?"
-		args = append(args, decision)
-	}
-
-	query += " ORDER BY execution_time DESC LIMIT ? OFFSET ?"
-	args = append(args, limit, offset)
-
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.DB.Query(query, pageArgs...)
 	if err != nil {
+		log.Printf("Failed to query events: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch events"})
 		return
 	}
@@ -62,35 +106,44 @@ func ListEvents(c *gin.Context) {
 		events = append(events, event)
 	}
 
-	// Get total count
-	countQuery := "SELECT COUNT(*) FROM events WHERE 1=1"
-	countArgs := []interface{}{}
-	if machineID != "" {
-		countQuery += " AND machine_id = ?"
-		countArgs = append(countArgs, machineID)
-	}
-	if decision != "" {
-		countQuery += " AND decision = ?"
-		countArgs = append(countArgs, decision)
-	}
-
-	var total int
-	if err := database.DB.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
-		log.Printf("Failed to count events: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch events"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"events": events,
-		"total":  total,
-		"page":   page,
-		"limit":  limit,
+	c.JSON(http.StatusOK, pageResponse{
+		Items: events, Total: total, Page: p.Page, PerPage: p.PerPage,
 	})
 }
 
-// ListPrograms returns unique programs/binaries seen in events
+// buildProgramsFilter assembles the WHERE clause and bound args applied to
+// events before they are grouped by file_hash. Only free-text search applies.
+// The search gates group membership through a file_hash subquery so a program
+// whose rows only partially match still aggregates over ALL of its events;
+// filtering rows directly would under-count execution/allow/block totals.
+func buildProgramsFilter(_ *gin.Context, p pageParams) (string, []any) {
+	clause, args := searchClause(p.Search,
+		"file_hash", "bundle_name", "file_path", "signing_id")
+	if clause == "" {
+		return "", args
+	}
+	return " WHERE file_hash IN (SELECT file_hash FROM events WHERE " +
+		clause + ")", args
+}
+
+// ListPrograms returns a paginated, searchable page of unique programs
+// (binaries) aggregated from events, grouped by file_hash.
+//
+// Note: every page re-aggregates the whole events table (minus the search
+// gate). Acceptable at current scale; move to a summary table if it grows.
 func ListPrograms(c *gin.Context) {
+	p := getPageParams(c)
+	where, args := buildProgramsFilter(c, p)
+
+	var total int
+	if err := database.DB.QueryRow(
+		"SELECT COUNT(DISTINCT file_hash) FROM events"+where, args...,
+	).Scan(&total); err != nil {
+		log.Printf("Failed to count programs: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch programs"})
+		return
+	}
+
 	query := `SELECT
 	            file_hash,
 	            file_path,
@@ -104,13 +157,15 @@ func ListPrograms(c *gin.Context) {
 	            SUM(CASE WHEN decision = 'ALLOW' THEN 1 ELSE 0 END) as allow_count,
 	            SUM(CASE WHEN decision = 'BLOCK' THEN 1 ELSE 0 END) as block_count,
 	            MAX(execution_time) as last_seen
-	          FROM events
+	          FROM events` + where + `
 	          GROUP BY file_hash
 	          ORDER BY execution_count DESC
-	          LIMIT 100`
+	          LIMIT ? OFFSET ?`
+	pageArgs := append(append([]any{}, args...), p.PerPage, p.Offset)
 
-	rows, err := database.DB.Query(query)
+	rows, err := database.DB.Query(query, pageArgs...)
 	if err != nil {
+		log.Printf("Failed to query programs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch programs"})
 		return
 	}
@@ -133,20 +188,19 @@ func ListPrograms(c *gin.Context) {
 
 	programs := []Program{}
 	for rows.Next() {
-		var p Program
+		var pr Program
 		err := rows.Scan(
-			&p.FileHash, &p.FilePath, &p.BundleID,
-			&p.BundleName, &p.CertCN, &p.CertSHA256, &p.SigningID, &p.TeamID,
-			&p.ExecutionCount, &p.AllowCount, &p.BlockCount, &p.LastSeen,
+			&pr.FileHash, &pr.FilePath, &pr.BundleID,
+			&pr.BundleName, &pr.CertCN, &pr.CertSHA256, &pr.SigningID, &pr.TeamID,
+			&pr.ExecutionCount, &pr.AllowCount, &pr.BlockCount, &pr.LastSeen,
 		)
 		if err != nil {
 			continue
 		}
-		programs = append(programs, p)
+		programs = append(programs, pr)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"programs": programs,
-		"total":    len(programs),
+	c.JSON(http.StatusOK, pageResponse{
+		Items: programs, Total: total, Page: p.Page, PerPage: p.PerPage,
 	})
 }

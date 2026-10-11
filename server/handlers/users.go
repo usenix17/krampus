@@ -11,12 +11,35 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ListUsers returns all users (admin only)
+// buildUsersFilter assembles the WHERE clause and bound args shared by the
+// users list count and page queries from the search param.
+func buildUsersFilter(_ *gin.Context, p pageParams) (string, []any) {
+	clause, args := searchClause(p.Search, "username", "email")
+	if clause == "" {
+		return "", args
+	}
+	return " WHERE " + clause, args
+}
+
+// ListUsers returns a paginated, searchable page of users (admin only).
 func ListUsers(c *gin.Context) {
-	rows, err := database.DB.Query(
-		`SELECT id, username, role, oidc_subject, email, created_at, last_login
-		 FROM users ORDER BY created_at DESC`,
-	)
+	p := getPageParams(c)
+	where, args := buildUsersFilter(c, p)
+
+	var total int
+	if err := database.DB.QueryRow(
+		"SELECT COUNT(*) FROM users"+where, args...,
+	).Scan(&total); err != nil {
+		log.Printf("Failed to count users: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch users"})
+		return
+	}
+
+	query := `SELECT id, username, role, oidc_subject, email, created_at, last_login
+	          FROM users` + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	pageArgs := append(append([]any{}, args...), p.PerPage, p.Offset)
+
+	rows, err := database.DB.Query(query, pageArgs...)
 	if err != nil {
 		log.Printf("Failed to query users: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch users"})
@@ -35,7 +58,9 @@ func ListUsers(c *gin.Context) {
 		users = append(users, u)
 	}
 
-	c.JSON(http.StatusOK, users)
+	c.JSON(http.StatusOK, pageResponse{
+		Items: users, Total: total, Page: p.Page, PerPage: p.PerPage,
+	})
 }
 
 // GetUser returns a single user by ID (admin only)
