@@ -4,8 +4,107 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"krampus/server/config"
+
 	"github.com/gin-gonic/gin"
 )
+
+// santaAuthStatus wires SantaAuthMiddleware ahead of a handler that records a
+// hit, returning the HTTP status and whether the handler ran. It sets
+// config.AppConfig for the duration of the call and restores it afterward.
+func santaAuthStatus(t *testing.T, key, enforce string, provided string, viaBearer bool) (int, bool) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	prev := config.AppConfig
+	config.AppConfig = &config.Config{
+		SantaSyncKey:     key,
+		SantaSyncEnforce: enforce == "true",
+	}
+	defer func() { config.AppConfig = prev }()
+
+	reached := false
+	r := gin.New()
+	r.POST("/preflight/:machine_id", SantaAuthMiddleware(), func(c *gin.Context) {
+		reached = true
+		c.Status(200)
+	})
+
+	req := httptest.NewRequest("POST", "/preflight/some-machine", nil)
+	if provided != "" {
+		if viaBearer {
+			req.Header.Set("Authorization", "Bearer "+provided)
+		} else {
+			req.Header.Set("X-Santa-Key", provided)
+		}
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w.Code, reached
+}
+
+func TestSantaAuthMiddlewareEnforceBadKeyRejected(t *testing.T) {
+	code, reached := santaAuthStatus(t, "correct-key", "true", "wrong-key", false)
+	if code != 401 || reached {
+		t.Errorf("enforce=true bad key: code=%d reached=%v, want 401/false", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareEnforceMissingKeyRejected(t *testing.T) {
+	code, reached := santaAuthStatus(t, "correct-key", "true", "", false)
+	if code != 401 || reached {
+		t.Errorf("enforce=true missing key: code=%d reached=%v, want 401/false", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareEnforceValidKeyAccepted(t *testing.T) {
+	code, reached := santaAuthStatus(t, "correct-key", "true", "correct-key", false)
+	if code != 200 || !reached {
+		t.Errorf("enforce=true valid key: code=%d reached=%v, want 200/true", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareEnforceValidKeyViaBearerAccepted(t *testing.T) {
+	code, reached := santaAuthStatus(t, "correct-key", "true", "correct-key", true)
+	if code != 200 || !reached {
+		t.Errorf("enforce=true valid bearer key: code=%d reached=%v, want 200/true", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareLogOnlyBadKeyAllowed(t *testing.T) {
+	code, reached := santaAuthStatus(t, "correct-key", "false", "wrong-key", false)
+	if code != 200 || !reached {
+		t.Errorf("enforce=false bad key: code=%d reached=%v, want 200/true", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareLogOnlyMissingKeyAllowed(t *testing.T) {
+	code, reached := santaAuthStatus(t, "correct-key", "false", "", false)
+	if code != 200 || !reached {
+		t.Errorf("enforce=false missing key: code=%d reached=%v, want 200/true", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareLogOnlyValidKeyAllowed(t *testing.T) {
+	code, reached := santaAuthStatus(t, "correct-key", "false", "correct-key", false)
+	if code != 200 || !reached {
+		t.Errorf("enforce=false valid key: code=%d reached=%v, want 200/true", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareEmptyKeyOpenRegardlessOfEnforceTrue(t *testing.T) {
+	code, reached := santaAuthStatus(t, "", "true", "", false)
+	if code != 200 || !reached {
+		t.Errorf("empty key enforce=true: code=%d reached=%v, want 200/true", code, reached)
+	}
+}
+
+func TestSantaAuthMiddlewareEmptyKeyOpenRegardlessOfEnforceFalse(t *testing.T) {
+	code, reached := santaAuthStatus(t, "", "false", "", false)
+	if code != 200 || !reached {
+		t.Errorf("empty key enforce=false: code=%d reached=%v, want 200/true", code, reached)
+	}
+}
 
 // machineIDStatus wires ValidateMachineID ahead of a handler that records a
 // hit, returning the HTTP status and whether the handler ran.

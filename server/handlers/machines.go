@@ -224,6 +224,7 @@ func GenerateMobileConfig(c *gin.Context) {
 		input.OrganizationName,
 		input.MachineOwner,
 		input.UploadInterval,
+		config.AppConfig.SantaSyncKey,
 	)
 
 	// Set headers for file download

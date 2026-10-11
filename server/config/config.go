@@ -37,6 +37,9 @@ type Config struct {
 	// Santa Sync Configuration
 	SantaSyncKey    string // Shared secret required on sync endpoints (empty = unauthenticated)
 	SantaClientMode string // Desired client mode pushed to agents: MONITOR or LOCKDOWN
+	// SantaSyncEnforce: false = log-only mode for staged sync-key rollout;
+	// invalid/missing keys are logged but allowed.
+	SantaSyncEnforce bool
 
 	// Discord Configuration
 	DiscordWebhookURL string // Webhook for new-proposal alerts (empty = disabled)
@@ -77,8 +80,9 @@ func Load() *Config {
 		CORSAllowedOrigins: parseList(getEnv("CORS_ALLOWED_ORIGINS", "")),
 
 		// Santa Sync
-		SantaSyncKey:    getEnv("SANTA_SYNC_KEY", ""),
-		SantaClientMode: strings.ToUpper(getEnv("SANTA_CLIENT_MODE", "LOCKDOWN")),
+		SantaSyncKey:     getEnv("SANTA_SYNC_KEY", ""),
+		SantaClientMode:  strings.ToUpper(getEnv("SANTA_CLIENT_MODE", "LOCKDOWN")),
+		SantaSyncEnforce: !strings.EqualFold(getEnv("SANTA_SYNC_ENFORCE", "true"), "false"),
 
 		// Discord
 		DiscordWebhookURL: getEnv("DISCORD_WEBHOOK_URL", ""),
