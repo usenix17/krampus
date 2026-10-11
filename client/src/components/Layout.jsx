@@ -22,15 +22,19 @@ import {
   Event as EventIcon,
   Apps as AppsIcon,
   People as PeopleIcon,
+  Brightness4 as Brightness4Icon,
+  Brightness7 as Brightness7Icon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useColorMode } from '../contexts/ColorModeContext';
 
 const drawerWidth = 240;
 
 const Layout = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, logout, isAdmin } = useAuth();
+  const { mode, toggle } = useColorMode();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -93,6 +97,7 @@ const Layout = ({ children }) => {
           <IconButton
             color="inherit"
             edge="start"
+            aria-label="open navigation menu"
             onClick={handleDrawerToggle}
             sx={{ mr: 2, display: { sm: 'none' } }}
           >
@@ -104,6 +109,14 @@ const Layout = ({ children }) => {
           <Typography variant="body1" sx={{ mr: 2 }}>
             {user?.username} ({user?.role})
           </Typography>
+          <IconButton
+            color="inherit"
+            aria-label="toggle dark mode"
+            onClick={toggle}
+            sx={{ mr: 1 }}
+          >
+            {mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
+          </IconButton>
           <Button color="inherit" onClick={handleLogout}>
             Logout
           </Button>
