@@ -1,123 +1,146 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Box,
   Button,
-  Card,
-  CardContent,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Grid,
-  LinearProgress,
   TextField,
   Typography,
   MenuItem,
-  Alert,
   IconButton,
 } from '@mui/material';
-import { Refresh as RefreshIcon, Edit as EditIcon } from '@mui/icons-material';
+import { Refresh as RefreshIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import apiClient from '../api/client';
+import { useToast } from '../contexts/ToastContext';
+import usePagedQuery from '../hooks/usePagedQuery';
+import PageHeader from '../components/PageHeader';
+import DataTable from '../components/DataTable';
 
 const Users = () => {
-  const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const toast = useToast();
+  const {
+    items: users,
+    total,
+    page,
+    perPage,
+    search,
+    loading,
+    error,
+    setPage,
+    setPerPage,
+    setSearch,
+    refresh,
+  } = usePagedQuery('/api/users');
   const [openEdit, setOpenEdit] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [newRole, setNewRole] = useState('');
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-
-  const fetchUsers = async () => {
-    try {
-      const response = await apiClient.get('/api/users');
-      setUsers(response.data);
-    } catch (error) {
-      console.error('Failed to fetch users:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
 
   const handleEditRole = async () => {
     try {
       await apiClient.put(`/api/users/${selectedUser.id}`, { role: newRole });
-      setSuccess('User role updated successfully!');
+      toast.success('User role updated successfully!');
       setOpenEdit(false);
-      fetchUsers();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to update user role');
-      setTimeout(() => setError(''), 5000);
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update user role');
     }
   };
 
+  const handleDelete = async (user) => {
+    if (!window.confirm(`Are you sure you want to delete ${user.username}?`)) return;
+    try {
+      await apiClient.delete(`/api/users/${user.id}`);
+      toast.success('User deleted successfully!');
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete user');
+    }
+  };
+
+  const columns = [
+    { key: 'username', label: 'Username' },
+    { key: 'email', label: 'Email', render: (row) => row.email || '-' },
+    {
+      key: 'role',
+      label: 'Role',
+      render: (row) => (
+        <Chip
+          label={row.role}
+          size="small"
+          color={row.role === 'ADMIN' ? 'primary' : 'default'}
+        />
+      ),
+    },
+    {
+      key: 'created_at',
+      label: 'Created',
+      render: (row) => new Date(row.created_at).toLocaleString(),
+    },
+    {
+      key: 'last_login',
+      label: 'Last Login',
+      render: (row) => (row.last_login ? new Date(row.last_login).toLocaleString() : '-'),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      align: 'right',
+      render: (row) => (
+        <>
+          <IconButton
+            aria-label="edit user role"
+            size="small"
+            onClick={() => {
+              setSelectedUser(row);
+              setNewRole(row.role);
+              setOpenEdit(true);
+            }}
+          >
+            <EditIcon />
+          </IconButton>
+          <IconButton
+            aria-label="delete user"
+            color="error"
+            size="small"
+            onClick={() => handleDelete(row)}
+          >
+            <DeleteIcon />
+          </IconButton>
+        </>
+      ),
+    },
+  ];
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Users</Typography>
-        <IconButton onClick={fetchUsers}>
-          <RefreshIcon />
-        </IconButton>
-      </Box>
+      <PageHeader
+        title="Users"
+        actions={
+          <IconButton aria-label="refresh users" onClick={refresh}>
+            <RefreshIcon />
+          </IconButton>
+        }
+      />
 
-      {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-
-      {loading ? (
-        <LinearProgress />
-      ) : (
-        <Grid container spacing={2}>
-          {users.map((user) => (
-            <Grid item xs={12} md={6} key={user.id}>
-              <Card>
-                <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                    <Box sx={{ flex: 1 }}>
-                      <Typography variant="h6">{user.username}</Typography>
-                      <Box sx={{ mt: 1 }}>
-                        <Chip
-                          label={user.role}
-                          size="small"
-                          color={user.role === 'ADMIN' ? 'primary' : 'default'}
-                          sx={{ mr: 1 }}
-                        />
-                      </Box>
-                      {user.email && (
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                          {user.email}
-                        </Typography>
-                      )}
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                        Created: {new Date(user.created_at).toLocaleString()}
-                      </Typography>
-                      {user.last_login && (
-                        <Typography variant="caption" color="text.secondary">
-                          Last login: {new Date(user.last_login).toLocaleString()}
-                        </Typography>
-                      )}
-                    </Box>
-                    <IconButton
-                      onClick={() => {
-                        setSelectedUser(user);
-                        setNewRole(user.role);
-                        setOpenEdit(true);
-                      }}
-                    >
-                      <EditIcon />
-                    </IconButton>
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-      )}
+      <DataTable
+        columns={columns}
+        rows={users}
+        total={total}
+        page={page}
+        perPage={perPage}
+        onPageChange={setPage}
+        onPerPageChange={setPerPage}
+        loading={loading}
+        error={error}
+        onRetry={refresh}
+        emptyMessage="No users found"
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search users..."
+      />
 
       <Dialog open={openEdit} onClose={() => setOpenEdit(false)}>
         <DialogTitle>Edit User Role</DialogTitle>

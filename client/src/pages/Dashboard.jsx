@@ -7,6 +7,7 @@ import {
   Typography,
   CircularProgress,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import {
   HowToVote as VoteIcon,
   Rule as RuleIcon,
@@ -16,13 +17,14 @@ import {
 import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 
-const StatCard = ({ title, value, icon, color }) => (
+const StatCard = ({ title, value, icon, color, contrast }) => (
   <Card>
     <CardContent>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
         <Box
           sx={{
             backgroundColor: color,
+            color: contrast,
             borderRadius: '50%',
             p: 1,
             mr: 2,
@@ -33,13 +35,15 @@ const StatCard = ({ title, value, icon, color }) => (
         </Box>
         <Typography variant="h6">{title}</Typography>
       </Box>
-      <Typography variant="h3">{value !== null ? value : '...'}</Typography>
+      <Typography variant="h3">{value !== null && value !== undefined ? value : '...'}</Typography>
     </CardContent>
   </Card>
 );
 
 const Dashboard = () => {
   const { user, isAdmin } = useAuth();
+  const theme = useTheme();
+  const { stats: statColors } = theme.palette;
   const [stats, setStats] = useState({
     proposals: null,
     rules: null,
@@ -50,30 +54,34 @@ const Dashboard = () => {
 
   useEffect(() => {
     const fetchStats = async () => {
-      try {
-        const [proposalsRes, rulesRes, machinesRes] = await Promise.all([
-          apiClient.get('/api/proposals'),
-          apiClient.get('/api/rules'),
-          apiClient.get('/api/machines'),
-        ]);
-
-        const newStats = {
-          proposals: proposalsRes.data.length,
-          rules: rulesRes.data.length,
-          machines: machinesRes.data.length,
-        };
-
-        if (isAdmin()) {
-          const usersRes = await apiClient.get('/api/users');
-          newStats.users = usersRes.data.length;
-        }
-
-        setStats(newStats);
-      } catch (error) {
-        console.error('Failed to fetch stats:', error);
-      } finally {
-        setLoading(false);
+      // List endpoints now return an envelope; a 1-item page is enough to
+      // read `total`. Machines still returns a bare array. allSettled lets
+      // each card render whatever succeeded.
+      const requests = [
+        apiClient.get('/api/proposals', { params: { per_page: 1 } }),
+        apiClient.get('/api/rules', { params: { per_page: 1 } }),
+        apiClient.get('/api/machines'),
+      ];
+      if (isAdmin()) {
+        requests.push(apiClient.get('/api/users', { params: { per_page: 1 } }));
       }
+
+      const [proposalsRes, rulesRes, machinesRes, usersRes] =
+        await Promise.allSettled(requests);
+
+      const envelopeTotal = (result) =>
+        result?.status === 'fulfilled' ? result.value.data.total : null;
+
+      setStats({
+        proposals: envelopeTotal(proposalsRes),
+        rules: envelopeTotal(rulesRes),
+        machines:
+          machinesRes.status === 'fulfilled' && Array.isArray(machinesRes.value.data)
+            ? machinesRes.value.data.length
+            : null,
+        users: envelopeTotal(usersRes),
+      });
+      setLoading(false);
     };
 
     fetchStats();
@@ -87,6 +95,8 @@ const Dashboard = () => {
     );
   }
 
+  const contrast = (bg) => theme.palette.getContrastText(bg);
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -97,37 +107,41 @@ const Dashboard = () => {
       </Typography>
 
       <Grid container spacing={3}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Proposals"
             value={stats.proposals}
-            icon={<VoteIcon sx={{ color: 'white' }} />}
-            color="#1976d2"
+            icon={<VoteIcon />}
+            color={statColors.blue}
+            contrast={contrast(statColors.blue)}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Active Rules"
             value={stats.rules}
-            icon={<RuleIcon sx={{ color: 'white' }} />}
-            color="#2e7d32"
+            icon={<RuleIcon />}
+            color={statColors.green}
+            contrast={contrast(statColors.green)}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Machines"
             value={stats.machines}
-            icon={<ComputerIcon sx={{ color: 'white' }} />}
-            color="#ed6c02"
+            icon={<ComputerIcon />}
+            color={statColors.orange}
+            contrast={contrast(statColors.orange)}
           />
         </Grid>
         {isAdmin() && (
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <StatCard
               title="Users"
               value={stats.users}
-              icon={<PeopleIcon sx={{ color: 'white' }} />}
-              color="#9c27b0"
+              icon={<PeopleIcon />}
+              color={statColors.purple}
+              contrast={contrast(statColors.purple)}
             />
           </Grid>
         )}

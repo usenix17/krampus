@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   Box,
@@ -17,21 +17,43 @@ import {
   MenuItem,
   Alert,
   IconButton,
+  InputAdornment,
+  TablePagination,
+  Skeleton,
 } from '@mui/material';
 import {
   ThumbUp,
   ThumbDown,
   Add as AddIcon,
   Refresh as RefreshIcon,
+  Search as SearchIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
+import { useTheme } from '@mui/material/styles';
 import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import usePagedQuery from '../hooks/usePagedQuery';
+import PageHeader from '../components/PageHeader';
 
 const Proposals = () => {
   const { isAdmin } = useAuth();
+  const toast = useToast();
+  const theme = useTheme();
   const location = useLocation();
-  const [proposals, setProposals] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    items: proposals,
+    total,
+    page,
+    perPage,
+    search,
+    loading,
+    error,
+    setPage,
+    setPerPage,
+    setSearch,
+    refresh,
+  } = usePagedQuery('/api/proposals');
   const [openDialog, setOpenDialog] = useState(false);
   const [formData, setFormData] = useState({
     identifier: '',
@@ -39,40 +61,30 @@ const Proposals = () => {
     proposed_policy: 'ALLOWLIST',
     custom_message: '',
   });
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [highlightHash, setHighlightHash] = useState('');
   const [voteThreshold, setVoteThreshold] = useState(3); // Default to 3
   // Identifiers available for the binary a proposal is being created from,
   // keyed by rule type. Lets the Rule Type dropdown auto-fill the identifier.
   const [identifierOptions, setIdentifierOptions] = useState({});
 
-  const fetchConfig = async () => {
-    try {
-      const response = await apiClient.get('/api/config');
-      setVoteThreshold(response.data.vote_threshold || 3);
-    } catch (error) {
-      console.error('Failed to fetch config:', error);
-      // Keep default threshold of 3
-    }
-  };
-
-  const fetchProposals = async () => {
-    try {
-      const response = await apiClient.get('/api/proposals');
-      setProposals(response.data);
-    } catch (error) {
-      console.error('Failed to fetch proposals:', error);
-      setError('Failed to fetch proposals');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Hash from the Santa block notification used to highlight a matching card.
+  const highlightHash = useMemo(
+    () => (new URLSearchParams(location.search).get('hash') || '').toLowerCase(),
+    [location.search]
+  );
 
   useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const response = await apiClient.get('/api/config');
+        setVoteThreshold(response.data.vote_threshold || 3);
+      } catch (err) {
+        console.error('Failed to fetch config:', err);
+      }
+    };
     fetchConfig();
-    fetchProposals();
+  }, []);
 
+  useEffect(() => {
     // Check for hash and machine query parameters from Santa block notification
     const params = new URLSearchParams(location.search);
     const hash = params.get('hash');
@@ -82,99 +94,98 @@ const Proposals = () => {
     const signingId = params.get('signing_id');
     const teamId = params.get('team_id');
 
-    if (hash) {
-      setHighlightHash(hash.toLowerCase());
+    if (!hash) return;
 
-      // Wait for proposals to load, then check if one exists
-      const checkAndCreateProposal = async () => {
-        try {
-          const response = await apiClient.get('/api/proposals');
-          const existingProposal = response.data.find(
-            p => p.identifier.toLowerCase() === hash.toLowerCase()
-          );
+    const checkAndCreateProposal = async () => {
+      try {
+        const response = await apiClient.get('/api/proposals', {
+          params: { search: hash, per_page: 100 },
+        });
+        const list = response.data?.items || [];
+        const existingProposal = list.find(
+          (p) => p.identifier.toLowerCase() === hash.toLowerCase()
+        );
 
-          if (!existingProposal) {
-            // Detect identifier type
-            // SHA256 hashes are 64 hex characters
-            // Bundle IDs typically look like: com.company.app
-            const isSHA256 = /^[a-fA-F0-9]{64}$/.test(hash);
-            const isBundleID = /^[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)+$/.test(hash);
+        if (!existingProposal) {
+          const isSHA256 = /^[a-fA-F0-9]{64}$/.test(hash);
+          const isBundleID = /^[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)+$/.test(hash);
 
-            // Map each rule type to the identifier this event can offer, so the
-            // Rule Type dropdown can auto-fill the matching identifier.
-            let ruleType = 'BINARY'; // default
-            const idOptions = {};
-            if (isBundleID && !isSHA256) {
-              ruleType = 'SIGNINGID'; // hash is actually a bundle/signing id
-              idOptions.SIGNINGID = hash;
-            } else {
-              idOptions.BINARY = hash;
-            }
-            if (certSha256) idOptions.CERTIFICATE = certSha256;
-            if (signingId) idOptions.SIGNINGID = signingId;
-            if (teamId) idOptions.TEAMID = teamId;
-            setIdentifierOptions(idOptions);
-
-            // No proposal exists - pre-fill the form and open dialog
-            let customMessage = '';
-            if (comment && machine) {
-              customMessage = `${comment} (requested from ${machine})`;
-            } else if (comment) {
-              customMessage = comment;
-            } else if (machine) {
-              customMessage = `Requested from ${machine}`;
-            }
-
-            setFormData({
-              identifier: idOptions[ruleType] || hash,
-              rule_type: ruleType,
-              proposed_policy: 'ALLOWLIST',
-              custom_message: customMessage,
-            });
-            setOpenDialog(true);
-            setError('No proposal found for this binary. Please create one to request access.');
+          let ruleType = 'BINARY';
+          const idOptions = {};
+          if (isBundleID && !isSHA256) {
+            ruleType = 'SIGNINGID';
+            idOptions.SIGNINGID = hash;
           } else {
-            // Proposal exists - just highlight it
-            setSuccess('Found existing proposal for this binary. You can vote below.');
-            setTimeout(() => setSuccess(''), 5000);
+            idOptions.BINARY = hash;
           }
-        } catch (error) {
-          console.error('Failed to check for existing proposal:', error);
-        }
-      };
+          if (certSha256) idOptions.CERTIFICATE = certSha256;
+          if (signingId) idOptions.SIGNINGID = signingId;
+          if (teamId) idOptions.TEAMID = teamId;
+          setIdentifierOptions(idOptions);
 
-      checkAndCreateProposal();
-    }
-  }, [location]);
+          let customMessage = '';
+          if (comment && machine) {
+            customMessage = `${comment} (requested from ${machine})`;
+          } else if (comment) {
+            customMessage = comment;
+          } else if (machine) {
+            customMessage = `Requested from ${machine}`;
+          }
+
+          setFormData({
+            identifier: idOptions[ruleType] || hash,
+            rule_type: ruleType,
+            proposed_policy: 'ALLOWLIST',
+            custom_message: customMessage,
+          });
+          setOpenDialog(true);
+          toast.error('No proposal found for this binary. Please create one to request access.');
+        } else {
+          toast.success('Found existing proposal for this binary. You can vote below.');
+        }
+      } catch (err) {
+        console.error('Failed to check for existing proposal:', err);
+      }
+    };
+
+    checkAndCreateProposal();
+  }, [location, toast]);
 
   const handleVote = async (proposalId, voteType) => {
     try {
       await apiClient.post(`/api/proposals/${proposalId}/vote`, { vote_type: voteType });
-      setSuccess('Vote submitted successfully!');
-      fetchProposals();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to submit vote');
-      setTimeout(() => setError(''), 5000);
+      toast.success('Vote submitted successfully!');
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to submit vote');
     }
   };
 
   const handleApprove = async (proposalId, policy) => {
     try {
       await apiClient.post(`/api/proposals/${proposalId}/approve`, { policy });
-      setSuccess('Proposal approved!');
-      fetchProposals();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to approve proposal');
-      setTimeout(() => setError(''), 5000);
+      toast.success('Proposal approved!');
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to approve proposal');
+    }
+  };
+
+  const handleDelete = async (proposalId) => {
+    if (!window.confirm('Are you sure you want to delete this proposal?')) return;
+    try {
+      await apiClient.delete(`/api/proposals/${proposalId}`);
+      toast.success('Proposal deleted successfully!');
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete proposal');
     }
   };
 
   const handleCreate = async () => {
     try {
       await apiClient.post('/api/proposals', formData);
-      setSuccess('Proposal created successfully!');
+      toast.success('Proposal created successfully!');
       setOpenDialog(false);
       setIdentifierOptions({});
       setFormData({
@@ -183,17 +194,14 @@ const Proposals = () => {
         proposed_policy: 'ALLOWLIST',
         custom_message: '',
       });
-      fetchProposals();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to create proposal');
-      setTimeout(() => setError(''), 5000);
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create proposal');
     }
   };
 
   // When the rule type changes and we came from a specific binary, swap the
-  // identifier to the one that matches the newly selected type. If we have no
-  // per-type identifiers (a blank manual proposal), keep whatever was typed.
+  // identifier to the one that matches the newly selected type.
   const handleRuleTypeChange = (newType) => {
     setFormData((prev) => {
       const hasOptions = Object.keys(identifierOptions).length > 0;
@@ -229,136 +237,201 @@ const Proposals = () => {
     }
   };
 
+  const progress = (votes) => Math.min(100, (votes / Math.max(1, voteThreshold)) * 100);
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Proposals</Typography>
-        <Box>
-          <IconButton onClick={fetchProposals} sx={{ mr: 1 }}>
-            <RefreshIcon />
-          </IconButton>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={openBlankProposal}
-          >
-            New Proposal
-          </Button>
-        </Box>
+      <PageHeader
+        title="Proposals"
+        actions={
+          <>
+            <IconButton aria-label="refresh proposals" onClick={refresh} sx={{ mr: 1 }}>
+              <RefreshIcon />
+            </IconButton>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={openBlankProposal}>
+              New Proposal
+            </Button>
+          </>
+        }
+      />
+
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+        <TextField
+          size="small"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search proposals..."
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            },
+          }}
+          sx={{ minWidth: 240 }}
+        />
       </Box>
 
-      {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={refresh}>
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
+      )}
 
       {loading ? (
-        <LinearProgress />
-      ) : (
         <Grid container spacing={2}>
-          {proposals.map((proposal) => (
-            <Grid item xs={12} key={proposal.id}>
-              <Card
-                sx={{
-                  border: proposal.identifier.toLowerCase() === highlightHash ? '2px solid #1976d2' : 'none',
-                  backgroundColor: proposal.identifier.toLowerCase() === highlightHash ? '#e3f2fd' : 'inherit',
-                }}
-              >
-                <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 2 }}>
-                    <Box sx={{ flex: 1 }}>
-                      <Typography variant="h6" sx={{ wordBreak: 'break-all' }}>
-                        {proposal.identifier}
-                      </Typography>
-                      <Box sx={{ mt: 1 }}>
-                        <Chip label={proposal.rule_type} size="small" sx={{ mr: 1 }} />
-                        <Chip
-                          label={proposal.proposed_policy}
-                          size="small"
-                          color={proposal.proposed_policy === 'BLOCKLIST' ? 'error' : 'success'}
-                          sx={{ mr: 1 }}
-                        />
-                        <Chip label={proposal.status} size="small" color={getStatusColor(proposal.status)} />
-                      </Box>
-                      {proposal.custom_message && (
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                          {proposal.custom_message}
-                        </Typography>
-                      )}
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                        Created by {proposal.creator_username} on {new Date(proposal.created_at).toLocaleString()}
-                      </Typography>
-                    </Box>
-                    <Box sx={{ ml: 2, minWidth: 200 }}>
-                      <Typography variant="body2" gutterBottom>
-                        Votes:
-                      </Typography>
-                      <Box sx={{ mb: 1 }}>
-                        <Typography variant="caption">Allowlist: {proposal.allowlist_votes}/{voteThreshold}</Typography>
-                        <LinearProgress
-                          variant="determinate"
-                          value={(proposal.allowlist_votes / voteThreshold) * 100}
-                          sx={{ height: 8, borderRadius: 1, backgroundColor: '#e0e0e0' }}
-                          color="success"
-                        />
-                      </Box>
-                      <Box>
-                        <Typography variant="caption">Blocklist: {proposal.blocklist_votes}/{voteThreshold}</Typography>
-                        <LinearProgress
-                          variant="determinate"
-                          value={(proposal.blocklist_votes / voteThreshold) * 100}
-                          sx={{ height: 8, borderRadius: 1, backgroundColor: '#e0e0e0' }}
-                          color="error"
-                        />
-                      </Box>
-                      {proposal.status === 'PENDING' && (
-                        <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            color="success"
-                            startIcon={<ThumbUp />}
-                            onClick={() => handleVote(proposal.id, 'ALLOWLIST')}
-                          >
-                            Allowlist
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            color="error"
-                            startIcon={<ThumbDown />}
-                            onClick={() => handleVote(proposal.id, 'BLOCKLIST')}
-                          >
-                            Blocklist
-                          </Button>
-                        </Box>
-                      )}
-                      {isAdmin() && proposal.status === 'PENDING' && (
-                        <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="success"
-                            onClick={() => handleApprove(proposal.id, 'ALLOWLIST')}
-                          >
-                            Approve Allow
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="error"
-                            onClick={() => handleApprove(proposal.id, 'BLOCKLIST')}
-                          >
-                            Approve Block
-                          </Button>
-                        </Box>
-                      )}
-                    </Box>
-                  </Box>
-                </CardContent>
-              </Card>
+          {[0, 1, 2].map((i) => (
+            <Grid size={{ xs: 12 }} key={`skeleton-${i}`}>
+              <Skeleton variant="rounded" height={140} />
             </Grid>
           ))}
         </Grid>
+      ) : proposals.length === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+          No proposals found
+        </Typography>
+      ) : (
+        <Grid container spacing={2}>
+          {proposals.map((proposal) => {
+            const highlighted = proposal.identifier.toLowerCase() === highlightHash;
+            return (
+              <Grid size={{ xs: 12 }} key={proposal.id}>
+                <Card
+                  sx={{
+                    border: highlighted ? `2px solid ${theme.palette.primary.main}` : 'none',
+                    backgroundColor: highlighted ? theme.palette.action.hover : 'inherit',
+                  }}
+                >
+                  <CardContent>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 2 }}>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="h6" sx={{ wordBreak: 'break-all' }}>
+                          {proposal.identifier}
+                        </Typography>
+                        <Box sx={{ mt: 1 }}>
+                          <Chip label={proposal.rule_type} size="small" sx={{ mr: 1 }} />
+                          <Chip
+                            label={proposal.proposed_policy}
+                            size="small"
+                            color={proposal.proposed_policy === 'BLOCKLIST' ? 'error' : 'success'}
+                            sx={{ mr: 1 }}
+                          />
+                          <Chip label={proposal.status} size="small" color={getStatusColor(proposal.status)} />
+                        </Box>
+                        {proposal.custom_message && (
+                          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                            {proposal.custom_message}
+                          </Typography>
+                        )}
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                          Created by {proposal.creator_username} on {new Date(proposal.created_at).toLocaleString()}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ ml: 2, minWidth: 200 }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="body2" gutterBottom>
+                            Votes:
+                          </Typography>
+                          {isAdmin() && (
+                            <IconButton
+                              aria-label="delete proposal"
+                              color="error"
+                              size="small"
+                              onClick={() => handleDelete(proposal.id)}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          )}
+                        </Box>
+                        <Box sx={{ mb: 1 }}>
+                          <Typography variant="caption">Allowlist: {proposal.allowlist_votes}/{voteThreshold}</Typography>
+                          <LinearProgress
+                            variant="determinate"
+                            value={progress(proposal.allowlist_votes)}
+                            sx={{ height: 8, borderRadius: 1 }}
+                            color="success"
+                          />
+                        </Box>
+                        <Box>
+                          <Typography variant="caption">Blocklist: {proposal.blocklist_votes}/{voteThreshold}</Typography>
+                          <LinearProgress
+                            variant="determinate"
+                            value={progress(proposal.blocklist_votes)}
+                            sx={{ height: 8, borderRadius: 1 }}
+                            color="error"
+                          />
+                        </Box>
+                        {proposal.status === 'PENDING' && (
+                          <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="success"
+                              startIcon={<ThumbUp />}
+                              onClick={() => handleVote(proposal.id, 'ALLOWLIST')}
+                            >
+                              Allowlist
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="error"
+                              startIcon={<ThumbDown />}
+                              onClick={() => handleVote(proposal.id, 'BLOCKLIST')}
+                            >
+                              Blocklist
+                            </Button>
+                          </Box>
+                        )}
+                        {isAdmin() && proposal.status === 'PENDING' && (
+                          <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="success"
+                              onClick={() => handleApprove(proposal.id, 'ALLOWLIST')}
+                            >
+                              Approve Allow
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="error"
+                              onClick={() => handleApprove(proposal.id, 'BLOCKLIST')}
+                            >
+                              Approve Block
+                            </Button>
+                          </Box>
+                        )}
+                      </Box>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            );
+          })}
+        </Grid>
       )}
+
+      <TablePagination
+        component="div"
+        count={total}
+        page={total > 0 ? page - 1 : 0}
+        rowsPerPage={perPage}
+        onPageChange={(event, newPage) => setPage(newPage + 1)}
+        onRowsPerPageChange={(event) => setPerPage(parseInt(event.target.value, 10))}
+        rowsPerPageOptions={[10, 25, 50, 100]}
+      />
 
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create New Proposal</DialogTitle>

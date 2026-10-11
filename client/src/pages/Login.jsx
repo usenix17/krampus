@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Box, Button, Container, Paper, Typography, Alert, Chip } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import SecurityIcon from '@mui/icons-material/Security';
 import HowToVoteIcon from '@mui/icons-material/HowToVote';
@@ -12,8 +13,10 @@ import apiClient from '../api/client';
 const Login = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const theme = useTheme();
   const { user, login } = useAuth();
   const [error, setError] = useState('');
+  const { start: gradientStart, end: gradientEnd } = theme.palette.loginGradient;
 
   useEffect(() => {
     if (user) {
@@ -58,7 +61,7 @@ const Login = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        background: `linear-gradient(135deg, ${gradientStart} 0%, ${gradientEnd} 100%)`,
         position: 'relative',
         overflow: 'hidden',
         '&::before': {
@@ -101,7 +104,7 @@ const Login = () => {
               boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
             }}
           >
-            <SecurityIcon sx={{ fontSize: 60, color: '#667eea' }} />
+            <SecurityIcon sx={{ fontSize: 60, color: gradientStart }} />
           </Box>
 
           {/* Login Card */}
@@ -136,9 +139,10 @@ const Login = () => {
               sx={{
                 mt: 2,
                 py: 1.5,
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                background: `linear-gradient(135deg, ${gradientStart} 0%, ${gradientEnd} 100%)`,
                 '&:hover': {
-                  background: 'linear-gradient(135deg, #5568d3 0%, #63428a 100%)',
+                  filter: 'brightness(0.9)',
+                  background: `linear-gradient(135deg, ${gradientStart} 0%, ${gradientEnd} 100%)`,
                 },
                 boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)',
               }}
@@ -151,9 +155,9 @@ const Login = () => {
                 Platform Features
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                {features.map((feature, index) => (
+                {features.map((feature) => (
                   <Chip
-                    key={index}
+                    key={feature.text}
                     icon={feature.icon}
                     label={feature.text}
                     variant="outlined"
@@ -162,7 +166,7 @@ const Login = () => {
                       py: 2.5,
                       px: 1,
                       '& .MuiChip-icon': {
-                        color: '#667eea',
+                        color: gradientStart,
                         ml: 1,
                       },
                     }}
