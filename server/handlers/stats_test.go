@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"krampus/server/config"
 )
@@ -83,8 +84,11 @@ func TestStatsOverviewSeeded(t *testing.T) {
 		VALUES ('m2', 'stale-host', NULL)`)
 
 	// Events across both machines, today and 2 days ago, allow + block.
+	// h1 is seeded with the canonical bare-UTC string the event upload path
+	// produces, so the production storage format is exercised here.
+	nowUTC := time.Now().UTC().Format("2006-01-02 15:04:05")
 	exec(t, `INSERT INTO events (machine_id, file_hash, bundle_name, file_path, decision, execution_time)
-		VALUES ('m1', 'h1', 'good-app', '/bin/good', 'ALLOW_BINARY', datetime('now'))`)
+		VALUES ('m1', 'h1', 'good-app', '/bin/good', 'ALLOW_BINARY', ?)`, nowUTC)
 	exec(t, `INSERT INTO events (machine_id, file_hash, bundle_name, file_path, decision, execution_time)
 		VALUES ('m1', 'h2', 'bad-app', '/bin/bad', 'BLOCK_BINARY', datetime('now'))`)
 	exec(t, `INSERT INTO events (machine_id, file_hash, bundle_name, file_path, decision, execution_time)

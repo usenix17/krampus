@@ -144,7 +144,10 @@ func EventUpload(c *gin.Context) {
 	// Insert JSON events into database
 	eventCount := 0
 	for _, event := range input.Events {
-		execTime := time.Unix(int64(event.ExecutionTime), 0)
+		// Bind execution_time as a bare UTC string: binding a time.Time makes
+		// the driver append a timezone offset, which breaks lexical comparison
+		// against datetime('now', ...) and the bare format used everywhere else.
+		execTime := time.Unix(int64(event.ExecutionTime), 0).UTC().Format("2006-01-02 15:04:05")
 
 		_, err := database.DB.Exec(
 			`INSERT INTO events (machine_id, file_path, file_hash, execution_time, decision,

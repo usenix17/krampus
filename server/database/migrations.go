@@ -20,6 +20,7 @@ var migrations = []migration{
 	{2, "dedupe rules, unique (identifier, rule_type)", migrateDedupeRules},
 	{3, "ensure rules.comment, backfill custom_message", migrateRuleCommentAndBackfill},
 	{4, "performance indexes", migratePerfIndexes},
+	{5, "normalize events.execution_time to UTC", migrateNormalizeEventTimes},
 }
 
 // RunMigrations applies pending migrations. Databases created before the
@@ -271,5 +272,16 @@ func migratePerfIndexes(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_events_execution_time ON events(execution_time)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_decision ON events(decision)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
+	)
+}
+
+// migrateNormalizeEventTimes rewrites execution_time values that carry a
+// timezone-offset suffix (the Go driver's time.Time serialization) to bare
+// UTC. datetime() normalizes offset formats, passes bare rows through
+// unchanged, and returns NULL for garbage, which the WHERE guard skips.
+func migrateNormalizeEventTimes(tx *sql.Tx) error {
+	return execAll(tx,
+		`UPDATE events SET execution_time = datetime(execution_time)
+		 WHERE datetime(execution_time) IS NOT NULL`,
 	)
 }

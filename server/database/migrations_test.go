@@ -197,6 +197,55 @@ CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT
 	}
 }
 
+// Rows written before the UTC fix carry a timezone-offset suffix (the Go
+// sqlite driver's time.Time serialization). Migration 5 must normalize them
+// to bare UTC so lexical datetime comparisons are sound.
+func TestMigrationNormalizesEventExecutionTime(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-offsets.db")
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(legacySchema); err != nil {
+		t.Fatal(err)
+	}
+	// One offset-suffixed row (pre-fix format) and one already-bare row.
+	if _, err := raw.Exec(`INSERT INTO events (machine_id, file_hash, execution_time, decision)
+		VALUES ('m1', 'h-offset', '2026-10-10 14:30:00-07:00', 'BLOCK')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO events (machine_id, file_hash, execution_time, decision)
+		VALUES ('m1', 'h-bare', '2026-10-09 08:00:00', 'ALLOW')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	if err := Initialize(dbPath); err != nil {
+		t.Fatalf("Initialize legacy with offset timestamps: %v", err)
+	}
+	t.Cleanup(func() { Close() })
+
+	// CAST avoids the driver's DATETIME decltype conversion so we see the
+	// raw stored text.
+	var stored string
+	if err := DB.QueryRow(
+		`SELECT CAST(execution_time AS TEXT) FROM events WHERE file_hash = 'h-offset'`,
+	).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "2026-10-10 21:30:00" {
+		t.Errorf("offset row normalized to %q, want 2026-10-10 21:30:00 (UTC)", stored)
+	}
+	if err := DB.QueryRow(
+		`SELECT CAST(execution_time AS TEXT) FROM events WHERE file_hash = 'h-bare'`,
+	).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "2026-10-09 08:00:00" {
+		t.Errorf("bare row changed to %q, want unchanged 2026-10-09 08:00:00", stored)
+	}
+}
+
 // A migration that fails partway must roll back its DDL and leave no version
 // row, and a later corrected run of the same version must apply cleanly.
 func TestFailedMigrationRollsBack(t *testing.T) {
