@@ -7,6 +7,7 @@ import { useToast } from '../contexts/ToastContext';
 import usePagedQuery from '../hooks/usePagedQuery';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
+import { formatDateTime } from '../utils/datetime';
 
 // Honor a configured API origin (VITE_API_URL) so export links work in
 // split-origin dev setups; the default '' keeps same-origin behavior.
@@ -124,7 +125,7 @@ const Programs = () => {
     {
       key: 'last_seen',
       label: 'Last Seen',
-      render: (row) => new Date(row.last_seen).toLocaleString(),
+      render: (row) => formatDateTime(row.last_seen),
     },
   ];
 

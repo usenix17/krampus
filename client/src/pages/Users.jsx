@@ -18,6 +18,7 @@ import { useToast } from '../contexts/ToastContext';
 import usePagedQuery from '../hooks/usePagedQuery';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
+import { formatDateTime } from '../utils/datetime';
 
 const Users = () => {
   const toast = useToast();
@@ -77,12 +78,12 @@ const Users = () => {
     {
       key: 'created_at',
       label: 'Created',
-      render: (row) => new Date(row.created_at).toLocaleString(),
+      render: (row) => formatDateTime(row.created_at),
     },
     {
       key: 'last_login',
       label: 'Last Login',
-      render: (row) => (row.last_login ? new Date(row.last_login).toLocaleString() : '-'),
+      render: (row) => formatDateTime(row.last_login, '-'),
     },
     {
       key: 'actions',

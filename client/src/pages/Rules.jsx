@@ -24,6 +24,7 @@ import { useToast } from '../contexts/ToastContext';
 import usePagedQuery from '../hooks/usePagedQuery';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
+import { formatDateTime } from '../utils/datetime';
 
 const truncate = (value) =>
   value && value.length > 32 ? `${value.slice(0, 32)}...` : value;
@@ -131,7 +132,7 @@ const Rules = () => {
     {
       key: 'created_at',
       label: 'Created',
-      render: (row) => new Date(row.created_at).toLocaleString(),
+      render: (row) => formatDateTime(row.created_at),
     },
   ];
 

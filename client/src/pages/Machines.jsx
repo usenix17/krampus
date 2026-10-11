@@ -22,6 +22,7 @@ import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import PageHeader from '../components/PageHeader';
+import { formatDateTime } from '../utils/datetime';
 
 const Machines = () => {
   const { isAdmin } = useAuth();
@@ -194,7 +195,7 @@ const Machines = () => {
                     )}
                     {machine.last_sync && (
                       <Typography variant="caption" color="text.secondary">
-                        Last sync: {new Date(machine.last_sync).toLocaleString()}
+                        Last sync: {formatDateTime(machine.last_sync)}
                       </Typography>
                     )}
                   </Box>

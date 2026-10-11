@@ -35,6 +35,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import usePagedQuery from '../hooks/usePagedQuery';
 import PageHeader from '../components/PageHeader';
+import { formatDateTime } from '../utils/datetime';
 
 const Proposals = () => {
   const { isAdmin } = useAuth();
@@ -334,7 +335,7 @@ const Proposals = () => {
                           </Typography>
                         )}
                         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                          Created by {proposal.creator_username} on {new Date(proposal.created_at).toLocaleString()}
+                          Created by {proposal.creator_username} on {formatDateTime(proposal.created_at)}
                         </Typography>
                       </Box>
                       <Box sx={{ ml: 2, minWidth: 200 }}>

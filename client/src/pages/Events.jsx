@@ -21,6 +21,7 @@ import { useToast } from '../contexts/ToastContext';
 import usePagedQuery from '../hooks/usePagedQuery';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
+import { formatDateTime } from '../utils/datetime';
 
 // Real agents send prefixed decisions (ALLOW_BINARY, BLOCK_BINARY), so
 // color by prefix rather than exact value.
@@ -135,7 +136,7 @@ const Events = () => {
     {
       key: 'execution_time',
       label: 'Timestamp',
-      render: (row) => new Date(row.execution_time).toLocaleString(),
+      render: (row) => formatDateTime(row.execution_time),
     },
     { key: 'machine_id', label: 'Machine' },
     {
