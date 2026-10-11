@@ -1,14 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ThemeProvider } from '@mui/material/styles';
-import CssBaseline from '@mui/material/CssBaseline';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import theme from './theme';
+import { ToastProvider } from './contexts/ToastContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Proposals from './pages/Proposals';
 import Rules from './pages/Rules';
 import Machines from './pages/Machines';
+import MachineDetail from './pages/MachineDetail';
 import Events from './pages/Events';
 import Programs from './pages/Programs';
 import Users from './pages/Users';
@@ -44,8 +43,7 @@ const AdminRoute = ({ children }) => {
 
 function App() {
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
+    <ToastProvider>
       <AuthProvider>
         <BrowserRouter>
           <Routes>
@@ -83,6 +81,14 @@ function App() {
               }
             />
             <Route
+              path="/machines/:id"
+              element={
+                <ProtectedRoute>
+                  <MachineDetail />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/events"
               element={
                 <ProtectedRoute>
@@ -112,7 +118,7 @@ function App() {
           </Routes>
         </BrowserRouter>
       </AuthProvider>
-    </ThemeProvider>
+    </ToastProvider>
   );
 }
 

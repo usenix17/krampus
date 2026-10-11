@@ -1,180 +1,208 @@
-import { useState, useEffect } from 'react';
-import {
-  Box,
-  Button,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-  Chip,
-  Stack,
-  Snackbar,
-  Alert,
-} from '@mui/material';
-import { getPrograms } from '../api/events';
-import { createRule } from '../api/rules';
+import { useMemo } from 'react';
+import { Box, Button, Chip, Stack, Typography } from '@mui/material';
+import { Download as DownloadIcon } from '@mui/icons-material';
+import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import usePagedQuery from '../hooks/usePagedQuery';
+import PageHeader from '../components/PageHeader';
+import DataTable from '../components/DataTable';
+import { formatDateTime } from '../utils/datetime';
+
+// Honor a configured API origin (VITE_API_URL) so export links work in
+// split-origin dev setups; the default '' keeps same-origin behavior.
+const apiBase = apiClient.defaults.baseURL || '';
 
 const Programs = () => {
   const { isAdmin } = useAuth();
-  const [programs, setPrograms] = useState([]);
-  const [toast, setToast] = useState({ open: false, severity: 'success', message: '' });
-
-  useEffect(() => {
-    loadPrograms();
-  }, []);
-
-  const loadPrograms = async () => {
-    try {
-      const response = await getPrograms();
-      setPrograms(response.data.programs || []);
-    } catch (error) {
-      console.error('Failed to load programs:', error);
-    }
-  };
+  const toast = useToast();
+  const {
+    items: programs,
+    total,
+    page,
+    perPage,
+    search,
+    loading,
+    error,
+    setPage,
+    setPerPage,
+    setSearch,
+    refresh,
+  } = usePagedQuery('/api/programs');
 
   const handleAllowlist = async (identifier, ruleType, comment) => {
     try {
-      await createRule({ identifier, rule_type: ruleType, policy: 'ALLOWLIST', comment: comment || '' });
-      setToast({ open: true, severity: 'success', message: `Allowlisted ${ruleType} ${identifier.substring(0, 20)}...` });
-      loadPrograms();
-    } catch (error) {
-      setToast({
-        open: true,
-        severity: 'error',
-        message: error.response?.data?.error || 'Failed to allowlist',
+      await apiClient.post('/api/rules', {
+        identifier,
+        rule_type: ruleType,
+        policy: 'ALLOWLIST',
+        comment: comment || '',
       });
+      toast.success(`Allowlisted ${ruleType} ${identifier.substring(0, 20)}...`);
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to allowlist');
     }
   };
 
+  // Mirror the live search onto the CSV export link.
+  const exportHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    const qs = params.toString();
+    return `${apiBase}/api/programs/export${qs ? `?${qs}` : ''}`;
+  }, [search]);
+
+  const columns = [
+    {
+      key: 'program',
+      label: 'Program',
+      render: (row) => (
+        <>
+          <Typography variant="body2">{row.file_path || 'Unknown'}</Typography>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontFamily: 'monospace' }}
+          >
+            {row.file_hash ? `${row.file_hash.substring(0, 16)}...` : ''}
+          </Typography>
+        </>
+      ),
+    },
+    {
+      key: 'bundle',
+      label: 'Bundle',
+      render: (row) =>
+        row.bundle_name ? (
+          <>
+            <Typography variant="body2">{row.bundle_name}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {row.bundle_id}
+            </Typography>
+          </>
+        ) : null,
+    },
+    {
+      key: 'certificate',
+      label: 'Certificate',
+      render: (row) => (
+        <>
+          {row.cert_cn && <Typography variant="body2">{row.cert_cn}</Typography>}
+          {row.team_id && (
+            <Typography variant="caption" color="text.secondary">
+              Team: {row.team_id}
+            </Typography>
+          )}
+        </>
+      ),
+    },
+    { key: 'execution_count', label: 'Executions' },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (row) => (
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          {row.allow_count > 0 && (
+            <Chip
+              label={`${row.allow_count} Allowed`}
+              color="success"
+              size="small"
+              variant="outlined"
+            />
+          )}
+          {row.block_count > 0 && (
+            <Chip
+              label={`${row.block_count} Blocked`}
+              color="error"
+              size="small"
+              variant="outlined"
+            />
+          )}
+        </Box>
+      ),
+    },
+    {
+      key: 'last_seen',
+      label: 'Last Seen',
+      render: (row) => formatDateTime(row.last_seen),
+    },
+  ];
+
+  if (isAdmin()) {
+    columns.push({
+      key: 'allowlist',
+      label: 'Allowlist',
+      render: (row) => (
+        <Stack direction="row" spacing={1}>
+          {row.team_id && (
+            <Button
+              size="small"
+              variant="outlined"
+              color="success"
+              onClick={() =>
+                handleAllowlist(
+                  row.team_id,
+                  'TEAMID',
+                  row.bundle_name || row.file_path
+                )
+              }
+            >
+              Team ID
+            </Button>
+          )}
+          {row.cert_sha256 && (
+            <Button
+              size="small"
+              variant="outlined"
+              color="success"
+              onClick={() =>
+                handleAllowlist(
+                  row.cert_sha256,
+                  'CERTIFICATE',
+                  row.cert_cn || row.bundle_name
+                )
+              }
+            >
+              Cert
+            </Button>
+          )}
+        </Stack>
+      ),
+    });
+  }
+
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 3 }}>
-        Installed Programs & Binaries
-      </Typography>
+      <PageHeader title="Installed Programs & Binaries" />
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Program</TableCell>
-              <TableCell>Bundle</TableCell>
-              <TableCell>Certificate</TableCell>
-              <TableCell>Executions</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Last Seen</TableCell>
-              {isAdmin() && <TableCell>Allowlist</TableCell>}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {programs.map((program) => (
-              <TableRow key={program.file_hash}>
-                <TableCell>
-                  <Typography variant="body2">
-                    {program.file_path || 'Unknown'}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                    {program.file_hash.substring(0, 16)}...
-                  </Typography>
-                </TableCell>
-                <TableCell>
-                  {program.bundle_name && (
-                    <>
-                      <Typography variant="body2">{program.bundle_name}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {program.bundle_id}
-                      </Typography>
-                    </>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {program.cert_cn && (
-                    <Typography variant="body2">{program.cert_cn}</Typography>
-                  )}
-                  {program.team_id && (
-                    <Typography variant="caption" color="text.secondary">
-                      Team: {program.team_id}
-                    </Typography>
-                  )}
-                </TableCell>
-                <TableCell>{program.execution_count}</TableCell>
-                <TableCell>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    {program.allow_count > 0 && (
-                      <Chip
-                        label={`${program.allow_count} Allowed`}
-                        color="success"
-                        size="small"
-                        variant="outlined"
-                      />
-                    )}
-                    {program.block_count > 0 && (
-                      <Chip
-                        label={`${program.block_count} Blocked`}
-                        color="error"
-                        size="small"
-                        variant="outlined"
-                      />
-                    )}
-                  </Box>
-                </TableCell>
-                <TableCell>
-                  {new Date(program.last_seen).toLocaleString()}
-                </TableCell>
-                {isAdmin() && (
-                  <TableCell>
-                    <Stack direction="row" spacing={1}>
-                      {program.team_id && (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          color="success"
-                          onClick={() => handleAllowlist(program.team_id, 'TEAMID', program.bundle_name || program.file_path)}
-                        >
-                          Team ID
-                        </Button>
-                      )}
-                      {program.cert_sha256 && (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          color="success"
-                          onClick={() => handleAllowlist(program.cert_sha256, 'CERTIFICATE', program.cert_cn || program.bundle_name)}
-                        >
-                          Cert
-                        </Button>
-                      )}
-                    </Stack>
-                  </TableCell>
-                )}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-
-      {programs.length === 0 && (
-        <Box sx={{ textAlign: 'center', py: 8 }}>
-          <Typography variant="body1" color="text.secondary">
-            No program execution data yet
-          </Typography>
-        </Box>
-      )}
-
-      <Snackbar
-        open={toast.open}
-        autoHideDuration={4000}
-        onClose={() => setToast({ ...toast, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={toast.severity} onClose={() => setToast({ ...toast, open: false })}>
-          {toast.message}
-        </Alert>
-      </Snackbar>
+      <DataTable
+        columns={columns}
+        rows={programs}
+        total={total}
+        page={page}
+        perPage={perPage}
+        onPageChange={setPage}
+        onPerPageChange={setPerPage}
+        loading={loading}
+        error={error}
+        onRetry={refresh}
+        emptyMessage="No program execution data yet"
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search programs..."
+        toolbarActions={
+          <Button
+            component="a"
+            href={exportHref}
+            download
+            startIcon={<DownloadIcon />}
+            variant="outlined"
+          >
+            Export CSV
+          </Button>
+        }
+      />
     </Box>
   );
 };

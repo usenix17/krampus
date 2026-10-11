@@ -55,16 +55,6 @@ func main() {
 		log.Println("Embedded frontend assets loaded successfully")
 	}
 
-	// Serve vite.svg
-	router.GET("/vite.svg", func(c *gin.Context) {
-		data, err := staticFiles.ReadFile("static/vite.svg")
-		if err != nil {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		c.Data(http.StatusOK, "image/svg+xml", data)
-	})
-
 	// Serve krampus.svg
 	router.GET("/krampus.svg", func(c *gin.Context) {
 		data, err := staticFiles.ReadFile("static/krampus.svg")
@@ -111,20 +101,24 @@ func main() {
 			proposalsGroup.GET("/:id", handlers.GetProposal)
 			proposalsGroup.POST("", handlers.CreateProposal)
 			proposalsGroup.POST("/:id/vote", handlers.VoteOnProposal)
+			proposalsGroup.GET("/:id/votes", handlers.ListProposalVotes)
 			proposalsGroup.DELETE("/:id", handlers.DeleteProposal)
 
 			// Admin-only proposal routes
 			proposalsGroup.POST("/:id/approve", middleware.AdminMiddleware(), handlers.ApproveProposal)
+			proposalsGroup.POST("/:id/reject", middleware.AdminMiddleware(), handlers.RejectProposal)
 		}
 
 		// Rules
 		rulesGroup := api.Group("/rules")
 		{
 			rulesGroup.GET("", handlers.ListRules)
+			rulesGroup.GET("/export", handlers.ExportRules)
 			rulesGroup.GET("/:id", handlers.GetRule)
 
 			// Admin-only rule routes
 			rulesGroup.POST("", middleware.AdminMiddleware(), handlers.CreateRule)
+			rulesGroup.PUT("/:id", middleware.AdminMiddleware(), handlers.UpdateRule)
 			rulesGroup.DELETE("/:id", middleware.AdminMiddleware(), handlers.DeleteRule)
 		}
 
@@ -133,6 +127,7 @@ func main() {
 		{
 			machinesGroup.GET("", handlers.ListMachines)
 			machinesGroup.GET("/:id", handlers.GetMachine)
+			machinesGroup.GET("/:id/events", handlers.ListMachineEvents)
 			machinesGroup.POST("", handlers.RegisterMachine)
 			machinesGroup.POST("/:id/mobileconfig", handlers.GenerateMobileConfig)
 
@@ -144,13 +139,18 @@ func main() {
 		eventsGroup := api.Group("/events")
 		{
 			eventsGroup.GET("", handlers.ListEvents)
+			eventsGroup.GET("/export", handlers.ExportEvents)
 		}
 
 		// Programs
 		programsGroup := api.Group("/programs")
 		{
 			programsGroup.GET("", handlers.ListPrograms)
+			programsGroup.GET("/export", handlers.ExportPrograms)
 		}
+
+		// Stats (dashboard overview)
+		api.GET("/stats/overview", handlers.StatsOverview)
 
 		// Users (admin-only)
 		usersGroup := api.Group("/users")
@@ -169,6 +169,7 @@ func main() {
 	santaGroup := router.Group("",
 		middleware.BodyLimitMiddleware(maxSantaBody),
 		middleware.SantaAuthMiddleware(),
+		middleware.ValidateMachineID(),
 		middleware.Decompress(),
 	)
 	{

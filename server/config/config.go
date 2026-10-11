@@ -17,16 +17,19 @@ type Config struct {
 	OIDCClientSecret string
 	OIDCRedirectURL  string
 	OIDCScopes       []string
+	OIDCAllowHS256   bool // Permit HMAC-signed ID tokens verified with the client secret
 
 	// JWT Configuration
-	JWTSecret string
-	JWTExpiry time.Duration
+	JWTSecret    string
+	JWTExpiry    time.Duration
+	CookieSecure bool // Forces the Secure flag on auth cookies
 
 	// Application Configuration
-	VoteThreshold int
-	AdminEmails   []string
-	SyncBaseURL   string
-	ServerPort    string
+	VoteThreshold     int
+	AdminEmails       []string
+	SyncBaseURL       string
+	ServerPort        string
+	StaleMachineHours int // Age after which a machine counts as stale on the dashboard
 
 	// CORS Configuration
 	CORSAllowedOrigins []string
@@ -56,16 +59,19 @@ func Load() *Config {
 		OIDCClientSecret: getEnv("OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8080/auth/callback"),
 		OIDCScopes:       strings.Split(getEnv("OIDC_SCOPES", "openid,profile,email"), ","),
+		OIDCAllowHS256:   strings.EqualFold(getEnv("OIDC_ALLOW_HS256", "false"), "true"),
 
 		// JWT
-		JWTSecret: getEnv("JWT_SECRET", defaultJWTSecret),
-		JWTExpiry: parseDuration(getEnv("JWT_EXPIRY", "24h")),
+		JWTSecret:    getEnv("JWT_SECRET", defaultJWTSecret),
+		JWTExpiry:    parseDuration(getEnv("JWT_EXPIRY", "24h")),
+		CookieSecure: strings.EqualFold(getEnv("COOKIE_SECURE", "false"), "true"),
 
 		// Application
-		VoteThreshold: parseInt(getEnv("VOTE_THRESHOLD", "3")),
-		AdminEmails:   parseList(getEnv("ADMIN_EMAILS", "")),
-		SyncBaseURL:   getEnv("SYNC_BASE_URL", "http://localhost:8080"),
-		ServerPort:    getEnv("SERVER_PORT", "8080"),
+		VoteThreshold:     parseInt(getEnv("VOTE_THRESHOLD", "3"), 3),
+		AdminEmails:       parseList(getEnv("ADMIN_EMAILS", "")),
+		SyncBaseURL:       getEnv("SYNC_BASE_URL", "http://localhost:8080"),
+		ServerPort:        getEnv("SERVER_PORT", "8080"),
+		StaleMachineHours: parseInt(getEnv("STALE_MACHINE_HOURS", "24"), 24),
 
 		// CORS
 		CORSAllowedOrigins: parseList(getEnv("CORS_ALLOWED_ORIGINS", "")),
@@ -105,6 +111,14 @@ func Load() *Config {
 		log.Printf("WARNING: invalid SANTA_CLIENT_MODE %q, falling back to LOCKDOWN", config.SantaClientMode)
 		config.SantaClientMode = "LOCKDOWN"
 	}
+	if config.VoteThreshold < 1 {
+		log.Printf("WARNING: VOTE_THRESHOLD %d is below 1, which would auto-finalize proposals on any vote - clamping to 1", config.VoteThreshold)
+		config.VoteThreshold = 1
+	}
+	if config.StaleMachineHours < 1 {
+		log.Printf("WARNING: STALE_MACHINE_HOURS %d is below 1, which would mark every machine stale instantly - resetting to 24", config.StaleMachineHours)
+		config.StaleMachineHours = 24
+	}
 
 	AppConfig = config
 	return config
@@ -119,11 +133,11 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func parseInt(value string) int {
+func parseInt(value string, fallback int) int {
 	i, err := strconv.Atoi(value)
 	if err != nil {
-		log.Printf("Failed to parse int from '%s', using 0\n", value)
-		return 0
+		log.Printf("Failed to parse int from %q, using %d", value, fallback)
+		return fallback
 	}
 	return i
 }

@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -12,142 +13,121 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Decompress middleware handles Content-Encoding: deflate and gzip
-// Also handles raw deflate data without Content-Encoding header (Santa does this)
+const maxDecompressed = 64 << 20 // decompressed cap; compressed is capped at 10 MiB upstream
+
+// Decompress transparently inflates gzip/deflate request bodies. Santa sends
+// zlib-wrapped deflate, sometimes without a Content-Encoding header, so JSON
+// requests with no encoding header are sniffed.
 func Decompress() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		encoding := c.GetHeader("Content-Encoding")
-		contentType := c.GetHeader("Content-Type")
-		log.Printf("Decompress middleware called: Content-Type=%s, Content-Encoding=%s", contentType, encoding)
+		encoding := strings.ToLower(c.GetHeader("Content-Encoding"))
+		isJSON := strings.Contains(c.GetHeader("Content-Type"), "json")
 
-		// If no encoding header but Content-Type is JSON, check if body is compressed
-		if encoding == "" && strings.Contains(contentType, "json") {
-			// Read the body to check if it's compressed
-			bodyBytes, err := io.ReadAll(c.Request.Body)
-			if err != nil {
-				c.AbortWithStatusJSON(400, gin.H{"error": "Failed to read body"})
-				return
-			}
-			c.Request.Body.Close()
-
-			log.Printf("Decompress middleware: Read %d bytes, first byte: 0x%02x", len(bodyBytes), bodyBytes[0])
-
-			// Check if it looks like JSON (starts with '{' or '[')
-			if len(bodyBytes) > 0 && (bodyBytes[0] == '{' || bodyBytes[0] == '[') {
-				// Already JSON, no decompression needed
-				log.Printf("Decompress middleware: Body is already JSON, no decompression needed")
-				c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				c.Next()
-				return
-			}
-
-			// Try gzip decompression first
-			gzipReader, err := gzip.NewReader(bytes.NewReader(bodyBytes))
-			if err == nil {
-				decompressed, err := io.ReadAll(gzipReader)
-				gzipReader.Close()
-				if err == nil && len(decompressed) > 0 {
-					log.Printf("Decompress middleware: Successfully decompressed with gzip (%d -> %d bytes)", len(bodyBytes), len(decompressed))
-					c.Request.Body = io.NopCloser(bytes.NewReader(decompressed))
-					c.Next()
-					return
-				}
-			}
-
-			// Try raw deflate
-			flateReader := flate.NewReader(bytes.NewReader(bodyBytes))
-			decompressed, err := io.ReadAll(flateReader)
-			flateReader.Close()
-
-			if err == nil && len(decompressed) > 0 {
-				// Successfully decompressed, use decompressed data
-				log.Printf("Decompress middleware: Successfully decompressed with raw deflate (%d -> %d bytes)", len(bodyBytes), len(decompressed))
-				c.Request.Body = io.NopCloser(bytes.NewReader(decompressed))
-			} else {
-				// Not compressed or failed to decompress, use original data
-				log.Printf("Decompress middleware: Failed to decompress (err=%v), using original data", err)
-				c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-			}
-
+		if encoding == "" && !isJSON {
 			c.Next()
 			return
 		}
 
-		if encoding == "" {
-			c.Next()
-			return
-		}
-
-		// Read the original body
-		bodyBytes, err := io.ReadAll(c.Request.Body)
+		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			log.Printf("Decompress middleware: Failed to read body: %v", err)
-			c.AbortWithStatusJSON(400, gin.H{"error": "Failed to read body"})
+			c.AbortWithStatusJSON(400, gin.H{"error": "failed to read body"})
 			return
 		}
 		c.Request.Body.Close()
 
-		log.Printf("Decompress middleware: Read %d bytes with encoding=%s", len(bodyBytes), encoding)
-		if len(bodyBytes) > 4 {
-			log.Printf("Decompress middleware: First 4 bytes: %02x %02x %02x %02x", bodyBytes[0], bodyBytes[1], bodyBytes[2], bodyBytes[3])
-		}
-
-		var decompressed []byte
-		switch strings.ToLower(encoding) {
-		case "deflate":
-			// Try zlib first (deflate with zlib header - 0x78 0x9C or similar)
-			zlibReader, zlibErr := zlib.NewReader(bytes.NewReader(bodyBytes))
-			if zlibErr == nil {
-				decompressed, err = io.ReadAll(zlibReader)
-				zlibReader.Close()
-				if err == nil && len(decompressed) > 0 {
-					log.Printf("Decompress middleware: Successfully decompressed with zlib (%d -> %d bytes)", len(bodyBytes), len(decompressed))
-				} else {
-					log.Printf("Decompress middleware: zlib read failed: %v", err)
-					decompressed = nil
-				}
-			} else {
-				log.Printf("Decompress middleware: zlib.NewReader failed: %v", zlibErr)
-			}
-
-			// If zlib failed, try raw deflate
-			if len(decompressed) == 0 {
-				reader := flate.NewReader(bytes.NewReader(bodyBytes))
-				decompressed, err = io.ReadAll(reader)
-				reader.Close()
-				if err != nil {
-					log.Printf("Decompress middleware: Failed to decompress raw deflate: %v", err)
-					c.AbortWithStatusJSON(400, gin.H{"error": "Failed to decompress deflate"})
-					return
-				}
-				log.Printf("Decompress middleware: Successfully decompressed with raw deflate (%d -> %d bytes)", len(bodyBytes), len(decompressed))
-			}
-		case "gzip":
-			reader, err := gzip.NewReader(bytes.NewReader(bodyBytes))
-			if err != nil {
-				log.Printf("Decompress middleware: Failed to create gzip reader: %v", err)
-				c.AbortWithStatusJSON(400, gin.H{"error": "Failed to decompress gzip"})
-				return
-			}
-			decompressed, err = io.ReadAll(reader)
-			reader.Close()
-			if err != nil {
-				log.Printf("Decompress middleware: Failed to decompress gzip: %v", err)
-				c.AbortWithStatusJSON(400, gin.H{"error": "Failed to decompress gzip"})
-				return
-			}
-		default:
-			// Unsupported encoding, pass through
-			c.Next()
+		out, err := inflate(body, encoding)
+		if err != nil {
+			log.Printf("Decompress: inflate failed (encoding=%q, %d bytes): %v", encoding, len(body), err)
+			c.AbortWithStatusJSON(400, gin.H{"error": "failed to decompress body"})
 			return
 		}
-
-		log.Printf("Decompress middleware: Successfully decompressed %d -> %d bytes", len(bodyBytes), len(decompressed))
-
-		// Replace the request body with decompressed version
-		c.Request.Body = io.NopCloser(bytes.NewReader(decompressed))
+		c.Request.Body = io.NopCloser(bytes.NewReader(out))
 		c.Request.Header.Del("Content-Encoding")
-
 		c.Next()
 	}
+}
+
+// inflate decodes body per the declared encoding; with no encoding it sniffs
+// compressed JSON. Unknown encodings and already-plain bodies pass through.
+func inflate(body []byte, encoding string) ([]byte, error) {
+	if len(body) == 0 {
+		return body, nil
+	}
+	switch encoding {
+	case "gzip":
+		return gunzip(body)
+	case "deflate":
+		if out, err := unzlib(body); err == nil {
+			return out, nil
+		}
+		// Raw DEFLATE has no magic bytes, so corrupt input may "decode" to
+		// garbage here; that is intentionally left to fail at JSON parse
+		// downstream.
+		return deflateRaw(body)
+	case "":
+		if body[0] == '{' || body[0] == '[' {
+			return body, nil
+		}
+		if out, err := gunzip(body); err == nil {
+			return out, nil
+		}
+		if out, err := unzlib(body); err == nil {
+			return out, nil
+		}
+		if out, err := deflateRaw(body); err == nil && len(out) > 0 {
+			return out, nil
+		}
+		return body, nil
+	default:
+		return body, nil
+	}
+}
+
+// readCapped reads at most maxDecompressed bytes, erroring past the cap so a
+// small compressed bomb cannot balloon into an unbounded allocation.
+func readCapped(r io.Reader) ([]byte, error) {
+	out, err := io.ReadAll(io.LimitReader(r, maxDecompressed+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxDecompressed {
+		return nil, fmt.Errorf("decompressed body exceeds %d bytes", maxDecompressed)
+	}
+	return out, nil
+}
+
+func gunzip(body []byte) ([]byte, error) {
+	r, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	out, err := readCapped(r)
+	if err != nil {
+		return nil, fmt.Errorf("gzip: %w", err)
+	}
+	return out, nil
+}
+
+func unzlib(body []byte) ([]byte, error) {
+	r, err := zlib.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	out, err := readCapped(r)
+	if err != nil {
+		return nil, fmt.Errorf("zlib: %w", err)
+	}
+	return out, nil
+}
+
+func deflateRaw(body []byte) ([]byte, error) {
+	r := flate.NewReader(bytes.NewReader(body))
+	defer r.Close()
+	out, err := readCapped(r)
+	if err != nil {
+		return nil, fmt.Errorf("deflate: %w", err)
+	}
+	return out, nil
 }

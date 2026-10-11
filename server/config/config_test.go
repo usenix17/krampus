@@ -19,6 +19,15 @@ func TestParseList(t *testing.T) {
 	}
 }
 
+func TestParseIntFallsBackToDefault(t *testing.T) {
+	if got := parseInt("not-a-number", 3); got != 3 {
+		t.Errorf("parseInt fallback = %d, want 3", got)
+	}
+	if got := parseInt("7", 3); got != 7 {
+		t.Errorf("parseInt = %d, want 7", got)
+	}
+}
+
 func TestIsAdminEmail(t *testing.T) {
 	c := &Config{AdminEmails: []string{"admin@example.com"}}
 	if !c.IsAdminEmail("ADMIN@example.com") {

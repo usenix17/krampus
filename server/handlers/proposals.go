@@ -9,14 +9,49 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// ListProposals returns all proposals with optional filtering
+// buildProposalsFilter assembles the WHERE clause and bound args shared by
+// the proposals list count and page queries from the status and search
+// params. Columns are prefixed with the p alias used by both queries.
+func buildProposalsFilter(c *gin.Context, pg pageParams) (string, []any) {
+	var conds []string
+	var args []any
+
+	if status := c.Query("status"); status != "" {
+		conds = append(conds, "p.status = ?")
+		args = append(args, status)
+	}
+	if clause, sargs := searchClause(pg.Search,
+		"p.identifier", "p.custom_message"); clause != "" {
+		conds = append(conds, clause)
+		args = append(args, sargs...)
+	}
+
+	if len(conds) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+// ListProposals returns a paginated, searchable page of proposals enriched
+// with their creator's username and email.
 func ListProposals(c *gin.Context) {
-	status := c.Query("status") // Filter by status if provided
+	pg := getPageParams(c)
+	where, args := buildProposalsFilter(c, pg)
+
+	var total int
+	if err := database.DB.QueryRow(
+		"SELECT COUNT(*) FROM proposals p"+where, args...,
+	).Scan(&total); err != nil {
+		log.Printf("Failed to count proposals: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch proposals"})
+		return
+	}
 
 	query := `
 		SELECT p.id, p.identifier, p.rule_type, p.proposed_policy, p.custom_message,
@@ -24,20 +59,11 @@ func ListProposals(c *gin.Context) {
 		       p.created_at, p.finalized_at,
 		       u.username, u.email
 		FROM proposals p
-		JOIN users u ON p.created_by = u.id
-	`
+		JOIN users u ON p.created_by = u.id` + where +
+		" ORDER BY p.created_at DESC LIMIT ? OFFSET ?"
+	pageArgs := append(append([]any{}, args...), pg.PerPage, pg.Offset)
 
-	var rows *sql.Rows
-	var err error
-
-	if status != "" {
-		query += " WHERE p.status = ? ORDER BY p.created_at DESC"
-		rows, err = database.DB.Query(query, status)
-	} else {
-		query += " ORDER BY p.created_at DESC"
-		rows, err = database.DB.Query(query)
-	}
-
+	rows, err := database.DB.Query(query, pageArgs...)
 	if err != nil {
 		log.Printf("Failed to query proposals: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch proposals"})
@@ -61,7 +87,9 @@ func ListProposals(c *gin.Context) {
 		proposals = append(proposals, p)
 	}
 
-	c.JSON(http.StatusOK, proposals)
+	c.JSON(http.StatusOK, pageResponse{
+		Items: proposals, Total: total, Page: pg.Page, PerPage: pg.PerPage,
+	})
 }
 
 // GetProposal returns a single proposal by ID
@@ -245,6 +273,76 @@ func ApproveProposal(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Proposal approved successfully"})
+}
+
+// RejectProposal allows admin to reject a pending proposal without creating a rule
+func RejectProposal(c *gin.Context) {
+	proposalID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid proposal ID"})
+		return
+	}
+
+	if err := services.RejectProposal(proposalID); err != nil {
+		log.Printf("Failed to reject proposal: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Proposal rejected"})
+}
+
+// voteRecord is one row of a proposal's vote history.
+type voteRecord struct {
+	Username  string    `json:"username"`
+	VoteType  string    `json:"vote_type"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListProposalVotes returns the per-user vote history for a proposal.
+func ListProposalVotes(c *gin.Context) {
+	proposalID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid proposal ID"})
+		return
+	}
+
+	var exists int
+	err = database.DB.QueryRow(`SELECT 1 FROM proposals WHERE id = ?`, proposalID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Proposal not found"})
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to fetch proposal: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch proposal"})
+		return
+	}
+
+	rows, err := database.DB.Query(
+		`SELECT v.vote_type, v.created_at, u.username
+		 FROM votes v JOIN users u ON u.id = v.user_id
+		 WHERE v.proposal_id = ? ORDER BY v.created_at`,
+		proposalID,
+	)
+	if err != nil {
+		log.Printf("Failed to query votes: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch votes"})
+		return
+	}
+	defer rows.Close()
+
+	votes := []voteRecord{}
+	for rows.Next() {
+		var v voteRecord
+		if err := rows.Scan(&v.VoteType, &v.CreatedAt, &v.Username); err != nil {
+			log.Printf("Failed to scan vote: %v", err)
+			continue
+		}
+		votes = append(votes, v)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"votes": votes})
 }
 
 // DeleteProposal deletes a proposal (creator or admin only)

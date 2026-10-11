@@ -1,30 +1,55 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Box,
   Button,
-  Card,
-  CardContent,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Grid,
-  LinearProgress,
   TextField,
   Typography,
   MenuItem,
-  Alert,
   IconButton,
 } from '@mui/material';
-import { Add as AddIcon, Refresh as RefreshIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon,
+  Refresh as RefreshIcon,
+  Delete as DeleteIcon,
+  Download as DownloadIcon,
+  Edit as EditIcon,
+} from '@mui/icons-material';
 import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import usePagedQuery from '../hooks/usePagedQuery';
+import PageHeader from '../components/PageHeader';
+import DataTable from '../components/DataTable';
+import { formatDateTime } from '../utils/datetime';
+
+const truncate = (value) =>
+  value && value.length > 32 ? `${value.slice(0, 32)}...` : value;
+
+// Honor a configured API origin (VITE_API_URL) so export links work in
+// split-origin dev setups; the default '' keeps same-origin behavior.
+const apiBase = apiClient.defaults.baseURL || '';
 
 const Rules = () => {
   const { isAdmin } = useAuth();
-  const [rules, setRules] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const toast = useToast();
+  const {
+    items: rules,
+    total,
+    page,
+    perPage,
+    search,
+    loading,
+    error,
+    setPage,
+    setPerPage,
+    setSearch,
+    refresh,
+  } = usePagedQuery('/api/rules');
   const [openDialog, setOpenDialog] = useState(false);
   const [formData, setFormData] = useState({
     identifier: '',
@@ -33,35 +58,55 @@ const Rules = () => {
     custom_message: '',
     comment: '',
   });
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-
-  const fetchRules = async () => {
-    try {
-      const response = await apiClient.get('/api/rules');
-      setRules(response.data);
-    } catch (error) {
-      console.error('Failed to fetch rules:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchRules();
-  }, []);
+  const [editData, setEditData] = useState({
+    open: false,
+    id: null,
+    custom_message: '',
+    comment: '',
+  });
 
   const handleCreate = async () => {
     try {
       await apiClient.post('/api/rules', formData);
-      setSuccess('Rule created successfully!');
+      toast.success('Rule created successfully!');
       setOpenDialog(false);
       setFormData({ identifier: '', rule_type: 'BINARY', policy: 'BLOCKLIST', custom_message: '', comment: '' });
-      fetchRules();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to create rule');
-      setTimeout(() => setError(''), 5000);
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create rule');
+    }
+  };
+
+  // Mirror the live search onto the CSV export link.
+  const exportHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    const qs = params.toString();
+    return `${apiBase}/api/rules/export${qs ? `?${qs}` : ''}`;
+  }, [search]);
+
+  const openEdit = (rule) => {
+    setEditData({
+      open: true,
+      id: rule.id,
+      custom_message: rule.custom_message || '',
+      comment: rule.comment || '',
+    });
+  };
+
+  // Always send both fields: the API treats "" as clear and nil as preserve,
+  // so sending the edited values keeps the dialog's state authoritative.
+  const handleUpdate = async () => {
+    try {
+      await apiClient.put(`/api/rules/${editData.id}`, {
+        custom_message: editData.custom_message,
+        comment: editData.comment,
+      });
+      toast.success('Rule updated successfully!');
+      setEditData({ open: false, id: null, custom_message: '', comment: '' });
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update rule');
     }
   };
 
@@ -69,81 +114,132 @@ const Rules = () => {
     if (!window.confirm('Are you sure you want to delete this rule?')) return;
     try {
       await apiClient.delete(`/api/rules/${ruleId}`);
-      setSuccess('Rule deleted successfully!');
-      fetchRules();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to delete rule');
-      setTimeout(() => setError(''), 5000);
+      toast.success('Rule deleted successfully!');
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete rule');
     }
   };
 
+  const columns = [
+    {
+      key: 'identifier',
+      label: 'Identifier',
+      render: (row) => (
+        <Typography variant="body2" sx={{ fontFamily: 'monospace' }} title={row.identifier}>
+          {truncate(row.identifier)}
+        </Typography>
+      ),
+    },
+    {
+      key: 'rule_type',
+      label: 'Type',
+      render: (row) => <Chip label={row.rule_type} size="small" />,
+    },
+    {
+      key: 'policy',
+      label: 'Policy',
+      render: (row) => (
+        <Chip
+          label={row.policy}
+          size="small"
+          color={row.policy === 'BLOCKLIST' ? 'error' : 'success'}
+        />
+      ),
+    },
+    {
+      key: 'comment',
+      label: 'Comment',
+      render: (row) => row.comment || '-',
+    },
+    {
+      key: 'custom_message',
+      label: 'Block Message',
+      // When the comment and block message are identical, avoid showing it twice.
+      render: (row) =>
+        row.custom_message && row.custom_message !== row.comment
+          ? row.custom_message
+          : '-',
+    },
+    {
+      key: 'created_at',
+      label: 'Created',
+      render: (row) => formatDateTime(row.created_at),
+    },
+  ];
+
+  if (isAdmin()) {
+    columns.push({
+      key: 'actions',
+      label: 'Actions',
+      align: 'right',
+      render: (row) => (
+        <>
+          <IconButton
+            aria-label="edit rule"
+            size="small"
+            onClick={() => openEdit(row)}
+          >
+            <EditIcon />
+          </IconButton>
+          <IconButton
+            aria-label="delete rule"
+            color="error"
+            size="small"
+            onClick={() => handleDelete(row.id)}
+          >
+            <DeleteIcon />
+          </IconButton>
+        </>
+      ),
+    });
+  }
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Active Rules</Typography>
-        <Box>
-          <IconButton onClick={fetchRules} sx={{ mr: 1 }}>
-            <RefreshIcon />
-          </IconButton>
-          {isAdmin() && (
-            <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpenDialog(true)}>
-              New Rule
-            </Button>
-          )}
-        </Box>
-      </Box>
+      <PageHeader
+        title="Active Rules"
+        actions={
+          <>
+            <IconButton aria-label="refresh rules" onClick={refresh} sx={{ mr: 1 }}>
+              <RefreshIcon />
+            </IconButton>
+            {isAdmin() && (
+              <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpenDialog(true)}>
+                New Rule
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-
-      {loading ? (
-        <LinearProgress />
-      ) : (
-        <Grid container spacing={2}>
-          {rules.map((rule) => (
-            <Grid item xs={12} key={rule.id}>
-              <Card>
-                <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                    <Box sx={{ flex: 1 }}>
-                      <Typography variant="h6" sx={{ wordBreak: 'break-all' }}>
-                        {rule.identifier}
-                      </Typography>
-                      <Box sx={{ mt: 1 }}>
-                        <Chip label={rule.rule_type} size="small" sx={{ mr: 1 }} />
-                        <Chip
-                          label={rule.policy}
-                          size="small"
-                          color={rule.policy === 'BLOCKLIST' ? 'error' : 'success'}
-                        />
-                      </Box>
-                      {rule.comment && (
-                        <Typography variant="body2" sx={{ mt: 1, fontWeight: 500 }}>
-                          {rule.comment}
-                        </Typography>
-                      )}
-                      {rule.custom_message && (
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                          Block message: {rule.custom_message}
-                        </Typography>
-                      )}
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                        Created on {new Date(rule.created_at).toLocaleString()}
-                      </Typography>
-                    </Box>
-                    {isAdmin() && (
-                      <IconButton onClick={() => handleDelete(rule.id)} color="error">
-                        <DeleteIcon />
-                      </IconButton>
-                    )}
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-      )}
+      <DataTable
+        columns={columns}
+        rows={rules}
+        total={total}
+        page={page}
+        perPage={perPage}
+        onPageChange={setPage}
+        onPerPageChange={setPerPage}
+        loading={loading}
+        error={error}
+        onRetry={refresh}
+        emptyMessage="No rules found"
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search rules..."
+        toolbarActions={
+          <Button
+            component="a"
+            href={exportHref}
+            download
+            startIcon={<DownloadIcon />}
+            variant="outlined"
+          >
+            Export CSV
+          </Button>
+        }
+      />
 
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create New Rule</DialogTitle>
@@ -203,6 +299,45 @@ const Rules = () => {
           <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
           <Button onClick={handleCreate} variant="contained">
             Create
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={editData.open}
+        onClose={() => setEditData({ open: false, id: null, custom_message: '', comment: '' })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Edit Rule</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="Comment"
+            value={editData.comment}
+            onChange={(e) => setEditData({ ...editData, comment: e.target.value })}
+            margin="normal"
+            helperText="Internal note to identify what application this rule is for"
+          />
+          <TextField
+            fullWidth
+            label="Custom Message"
+            value={editData.custom_message}
+            onChange={(e) => setEditData({ ...editData, custom_message: e.target.value })}
+            margin="normal"
+            multiline
+            rows={3}
+            helperText="Message shown to users when a binary is blocked"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setEditData({ open: false, id: null, custom_message: '', comment: '' })}
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleUpdate} variant="contained">
+            Save
           </Button>
         </DialogActions>
       </Dialog>

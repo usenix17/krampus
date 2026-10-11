@@ -13,6 +13,7 @@ A full-featured Santa sync server with OIDC authentication, user voting system f
 
 ![Events](docs/events.png)
 
+*Screenshots predate the dark-mode and analytics redesign and show the old light-mode UI.*
 
 ## Features
 
@@ -25,7 +26,14 @@ A full-featured Santa sync server with OIDC authentication, user voting system f
 - **Program Analytics**: Aggregate view of all executed binaries with metadata
 - **Santa Sync Protocol**: Full implementation of the Santa sync protocol (preflight, event upload, rule download, postflight)
 - **RESTful API**: Comprehensive API for managing proposals, rules, machines, events, and users
-- **SQLite Database**: Lightweight database for rules, votes, events, and session storage
+- **Server-Side Pagination & Search**: Events, programs, and rules lists page and search on the server, so large deployments stay fast
+- **CSV Export**: Export events, programs, or rules to CSV directly from the API
+- **Dashboard Analytics**: 30-day allow/block trend, top blocked binaries, and sync health (stale machine detection) on the Dashboard
+- **Dark Mode**: Toggle between light and dark themes in the web portal
+- **Machine Detail Pages**: Drill into a single machine's event history
+- **Proposal Vote History & Admin Reject**: See who voted on a proposal; admins can reject a proposal outright
+- **In-Place Rule Editing**: Admins can edit existing rules without deleting and recreating them
+- **SQLite Database**: Lightweight database for rules, votes, events, and session storage, with a versioned migration runner
 - **Single Binary Deployment**: Embedded frontend with no external dependencies
 
 ## Architecture
@@ -108,12 +116,15 @@ A full-featured Santa sync server with OIDC authentication, user voting system f
 | `OIDC_CLIENT_SECRET` | OIDC client secret | - |
 | `OIDC_REDIRECT_URL` | OIDC callback URL | `http://localhost:8080/auth/callback` |
 | `OIDC_SCOPES` | OIDC scopes (comma-separated) | `openid,profile,email` |
+| `OIDC_ALLOW_HS256` | Allow HMAC-signed ID tokens verified with the client secret. Only for providers that cannot issue RS256. The token `iss` must match the provider's discovered issuer (or `OIDC_PROVIDER_URL` when discovery is unavailable) | `false` |
 | `JWT_SECRET` | Secret for signing JWT tokens | `change-me-in-production` |
 | `JWT_EXPIRY` | JWT token expiration duration | `24h` |
+| `COOKIE_SECURE` | Force the `Secure` flag on auth cookies. Set true behind a TLS-terminating proxy where the app itself sees plain HTTP | `false` |
 | `VOTE_THRESHOLD` | Number of votes needed to approve a proposal | `3` |
 | `ADMIN_EMAILS` | Admin emails (comma-separated) | - |
 | `SYNC_BASE_URL` | Base URL for Santa clients | `http://localhost:8080` |
 | `SERVER_PORT` | Server port | `8080` |
+| `STALE_MACHINE_HOURS` | Hours since last sync after which a machine is flagged stale on the dashboard | `24` |
 | `CORS_ALLOWED_ORIGINS` | Origins allowed to send credentialed requests (comma-separated). Empty = credential-less wildcard | - |
 | `SANTA_SYNC_KEY` | Shared secret required on sync endpoints. Empty = unauthenticated. Sent as `Authorization: Bearer <key>` or `X-Santa-Key: <key>` | - |
 | `SANTA_CLIENT_MODE` | Desired client mode pushed to agents at preflight (`MONITOR` or `LOCKDOWN`) | `LOCKDOWN` |
@@ -167,6 +178,11 @@ identifier updates the existing rule rather than creating a duplicate.
 
 ## API Endpoints
 
+The `events`, `programs`, and `rules` list endpoints support server-side
+pagination and search (`?page=&per_page=&search=`; events also accept
+`machine_id`, `decision`, `from`, and `to`). Responses are shaped as
+`{"items": [...], "total": 0, "page": 1, "per_page": 50}`.
+
 ### Authentication
 - `GET /auth/login` - Initiate OIDC login flow
 - `GET /auth/callback` - OIDC callback handler
@@ -178,29 +194,38 @@ identifier updates the existing rule rather than creating a duplicate.
 - `GET /api/proposals/:id` - Get proposal details
 - `POST /api/proposals` - Create new proposal
 - `POST /api/proposals/:id/vote` - Vote on proposal
+- `GET /api/proposals/:id/votes` - List individual votes cast on the proposal
 - `POST /api/proposals/:id/approve` - Admin: Approve proposal (bypass voting)
+- `POST /api/proposals/:id/reject` - Admin: Reject proposal
 - `DELETE /api/proposals/:id` - Delete proposal (creator or admin)
 
 ### Rules
-- `GET /api/rules` - List all rules (filter by `?policy=ALLOWLIST` or `?rule_type=BINARY`)
+- `GET /api/rules` - List rules (filter by `?policy=ALLOWLIST` or `?rule_type=BINARY`, paginate/search with `?page=&per_page=&search=`)
+- `GET /api/rules/export` - Export rules as CSV
 - `GET /api/rules/:id` - Get rule details
 - `POST /api/rules` - Admin: Create rule directly
+- `PUT /api/rules/:id` - Admin: Edit an existing rule
 - `DELETE /api/rules/:id` - Admin: Delete rule
 
 ### Machines
 - `GET /api/machines` - List all enrolled machines
 - `GET /api/machines/:id` - Get machine details
+- `GET /api/machines/:id/events` - List execution events for this machine
 - `POST /api/machines` - Register new machine
 - `POST /api/machines/:id/mobileconfig` - Generate mobileconfig profile
 - `DELETE /api/machines/:id` - Admin: Delete machine
 
 ### Events
-- `GET /api/events` - List execution events (filter by `?machine_id=` or `?decision=ALLOW`)
-- Pagination: `?page=1&limit=50`
+- `GET /api/events` - List execution events (filter by `?machine_id=`, `?decision=ALLOW`, `?from=`, `?to=`; paginate/search with `?page=&per_page=&search=`)
+- `GET /api/events/export` - Export events as CSV
 
 ### Programs
-- `GET /api/programs` - List aggregated program statistics
+- `GET /api/programs` - List aggregated program statistics, paginate/search with `?page=&per_page=&search=`
+- `GET /api/programs/export` - Export programs as CSV
 - Shows unique binaries with execution counts, allow/block stats, and metadata
+
+### Stats
+- `GET /api/stats/overview` - Dashboard analytics: totals, 30-day allow/block trend, top blocked binaries, machine activity, and stale machines
 
 ### Users
 - `GET /api/users` - Admin: List all users
@@ -216,38 +241,44 @@ identifier updates the existing rule rather than creating a duplicate.
 
 ## Web Portal
 
-Access the Material-UI web portal at `http://localhost:8080` after starting the server. The portal includes:
+Access the Material-UI web portal at `http://localhost:8080` after starting the server. A dark mode toggle is available alongside the default light theme. The portal includes:
 
 ### Dashboard
 - Overview statistics (proposals, rules, machines, users)
+- 30-day allow/block trend, top blocked binaries, and sync health (stale machine flagging based on `STALE_MACHINE_HOURS`)
 - Quick access to all sections
 
 ### Proposals
 - View all proposals with voting status
 - Create new proposals for binaries
 - Vote on proposals (ALLOWLIST or BLOCKLIST)
-- Admin: Approve proposals bypassing voting
+- View the vote history for a proposal
+- Admin: Approve proposals bypassing voting, or reject them outright
 
 ### Rules
 - View all active allowlist/blocklist rules
-- Filter by policy or rule type
-- Admin: Create and delete rules directly
+- Filter, paginate, and search by policy or rule type
+- Admin: Create, edit, and delete rules directly
+- Export the current rule list as CSV
 
 ### Machines
 - View all enrolled Santa clients
 - Register new machines
+- Drill into a machine's detail page to see its event history
 - Generate and download mobileconfig profiles
 - Admin: Delete machines
 
 ### Events
 - View execution events from all machines
-- Filter by machine, decision (ALLOW/BLOCK)
-- Pagination support
+- Filter by machine, decision (ALLOW/BLOCK), and date range
+- Server-side pagination and search
+- Export the current event list as CSV
 
 ### Programs
 - Aggregated view of all executed binaries
 - Execution statistics and metadata
 - Certificate and signing information
+- Server-side pagination and search; export to CSV
 
 ### Users (Admin Only)
 - Manage user accounts
@@ -310,12 +341,12 @@ The voting system allows users to collectively decide on binary allowlist/blockl
 2. **Vote**: Users vote ALLOWLIST or BLOCKLIST on the proposal
 3. **Threshold**: When votes reach the configured threshold (default: 3), the proposal auto-finalizes
 4. **Rule Creation**: The winning policy (most votes) becomes an active rule
-5. **Admin Override**: Admins can bypass voting and directly approve proposals
+5. **Admin Override**: Admins can bypass voting and directly approve or reject proposals
 
 ### Proposal Lifecycle
 - **PENDING**: Waiting for votes
-- **APPROVED**: Threshold reached, rule created
-- **REJECTED**: Admin rejected (not currently auto-rejected)
+- **APPROVED**: Threshold reached, or an admin approved directly; rule created
+- **REJECTED**: An admin rejected the proposal; no rule is created
 
 ## Santa Client Configuration
 
@@ -427,6 +458,13 @@ sudo /usr/bin/profiles remove -identifier com.northpolesec.santa.config.<UUID>
 - **machines**: Enrolled Santa clients
 - **events**: Execution events from Santa clients
 - **sessions**: JWT session tracking for revocation
+
+### Migrations
+
+The schema is managed by a versioned migration runner (a `schema_migrations`
+table tracks applied versions). On startup, the server applies any pending
+migrations automatically, including on legacy databases that predate the
+runner. No manual migration steps are needed.
 
 ## Development
 

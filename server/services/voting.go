@@ -160,8 +160,8 @@ func FinalizeProposal(proposalID int64, policy string) error {
 	}
 	defer tx.Rollback()
 
-	// Update proposal status
-	now := time.Now()
+	// Update proposal status (bare UTC, matching events.execution_time)
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	_, err = tx.Exec(
 		`UPDATE proposals SET status = ?, finalized_at = ? WHERE id = ?`,
 		models.ProposalStatusApproved, now, proposalID,
@@ -172,17 +172,22 @@ func FinalizeProposal(proposalID int64, policy string) error {
 
 	// Create rule from proposal (upsert to respect the unique
 	// (identifier, rule_type) constraint on re-approval).
-	// Use custom_message as the comment to identify the application.
+	// custom_message is what Santa displays to the user on block;
+	// comment doubles as the human note identifying the application.
+	// Deliberate asymmetry: admin edits (handlers/rules.go PUT) set
+	// custom_message only when provided (nil/omitted preserves, ""
+	// clears to empty); re-votes preserve it via COALESCE.
 	_, err = tx.Exec(
-		`INSERT INTO rules (identifier, policy, rule_type, comment, created_by, proposal_id)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO rules (identifier, policy, rule_type, custom_message, comment, created_by, proposal_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(identifier, rule_type) DO UPDATE SET
 		   policy = excluded.policy,
+		   custom_message = COALESCE(excluded.custom_message, rules.custom_message),
 		   comment = COALESCE(excluded.comment, rules.comment),
 		   created_by = excluded.created_by,
 		   proposal_id = excluded.proposal_id`,
 		proposal.Identifier, policy, proposal.RuleType,
-		proposal.CustomMessage, proposal.CreatedBy, proposalID,
+		proposal.CustomMessage, proposal.CustomMessage, proposal.CreatedBy, proposalID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rule: %w", err)
@@ -200,6 +205,22 @@ func FinalizeProposal(proposalID int64, policy string) error {
 // AdminApproveProposal allows admin to bypass voting and directly approve a proposal
 func AdminApproveProposal(proposalID int64, policy string) error {
 	return FinalizeProposal(proposalID, policy)
+}
+
+// RejectProposal marks a pending proposal REJECTED without creating a rule.
+func RejectProposal(proposalID int64) error {
+	res, err := database.DB.Exec(
+		`UPDATE proposals SET status = ?, finalized_at = ? WHERE id = ? AND status = ?`,
+		models.ProposalStatusRejected, time.Now().UTC().Format("2006-01-02 15:04:05"),
+		proposalID, models.ProposalStatusPending,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to reject proposal: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("proposal not found or not pending")
+	}
+	return nil
 }
 
 // GetUserVote retrieves a user's vote for a specific proposal

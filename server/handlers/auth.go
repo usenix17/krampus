@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"krampus/server/config"
 	"krampus/server/database"
 	"krampus/server/middleware"
 	"krampus/server/models"
@@ -11,6 +12,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// setCookie applies SameSite=Lax and the Secure flag (TLS or COOKIE_SECURE)
+// to every auth cookie.
+func setCookie(c *gin.Context, name, value string, maxAge int) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	secure := config.AppConfig.CookieSecure || c.Request.TLS != nil
+	c.SetCookie(name, value, maxAge, "/", "", secure, true)
+}
 
 // Login initiates the OIDC authentication flow
 func Login(c *gin.Context) {
@@ -32,7 +41,7 @@ func Login(c *gin.Context) {
 
 	// Store state in session/cookie for validation in callback
 	// For simplicity, we'll use a secure cookie
-	c.SetCookie("oidc_state", state, 600, "/", "", false, true) // 10 minutes
+	setCookie(c, "oidc_state", state, 600) // 10 minutes
 
 	// Redirect to OIDC provider
 	authURL := services.GetAuthCodeURL(state)
@@ -50,7 +59,7 @@ func Callback(c *gin.Context) {
 	}
 
 	// Clear the state cookie
-	c.SetCookie("oidc_state", "", -1, "/", "", false, true)
+	setCookie(c, "oidc_state", "", -1)
 
 	// Get authorization code
 	code := c.Query("code")
@@ -100,34 +109,29 @@ func Callback(c *gin.Context) {
 	}
 
 	// Set token in cookie for security
-	c.SetCookie("token", jwtToken, 86400, "/", "", false, true) // 24 hours
+	setCookie(c, "token", jwtToken, 86400) // 24 hours
 
 	// Redirect to frontend login page which will handle the token from cookie
 	c.Redirect(http.StatusTemporaryRedirect, "/login?auth=success")
 }
 
-// Logout revokes the current session
+// Logout revokes the current session and clears the auth cookie.
 func Logout(c *gin.Context) {
-	// Extract token from header
-	authHeader := c.GetHeader("Authorization")
-	if authHeader == "" {
-		c.JSON(http.StatusOK, gin.H{"message": "Already logged out"})
-		return
+	tokenString := ""
+	if h := c.GetHeader("Authorization"); len(h) > 7 && h[:7] == "Bearer " {
+		tokenString = h[7:]
 	}
-
-	// Parse Bearer token
-	var tokenString string
-	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-		tokenString = authHeader[7:]
+	if tokenString == "" || tokenString == "httponly" {
+		if cookieToken, err := c.Cookie("token"); err == nil {
+			tokenString = cookieToken
+		}
 	}
-
-	if tokenString != "" {
-		// Revoke the token
+	if tokenString != "" && tokenString != "httponly" {
 		if err := services.RevokeToken(tokenString); err != nil {
 			log.Printf("Failed to revoke token: %v", err)
 		}
 	}
-
+	setCookie(c, "token", "", -1)
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
 }
 

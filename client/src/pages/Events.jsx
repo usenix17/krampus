@@ -1,245 +1,333 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-  Chip,
-  TablePagination,
-  TextField,
-  MenuItem,
-  IconButton,
-  Tooltip,
   Button,
+  Chip,
+  IconButton,
+  MenuItem,
   Stack,
-  Snackbar,
-  Alert,
+  TextField,
+  Tooltip,
+  Typography,
 } from '@mui/material';
-import AddCircleIcon from '@mui/icons-material/AddCircle';
-import { getEvents } from '../api/events';
-import { createRule } from '../api/rules';
+import {
+  AddCircle as AddCircleIcon,
+  Download as DownloadIcon,
+} from '@mui/icons-material';
+import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import usePagedQuery from '../hooks/usePagedQuery';
+import PageHeader from '../components/PageHeader';
+import DataTable from '../components/DataTable';
+import { formatDateTime } from '../utils/datetime';
+
+// Real agents send prefixed decisions (ALLOW_BINARY, BLOCK_BINARY), so
+// color by prefix rather than exact value.
+// Honor a configured API origin (VITE_API_URL) so export links work in
+// split-origin dev setups; the default '' keeps same-origin behavior.
+const apiBase = apiClient.defaults.baseURL || '';
+
+const getDecisionColor = (decision) => {
+  if (decision?.startsWith('ALLOW')) return 'success';
+  if (decision?.startsWith('BLOCK')) return 'error';
+  return 'default';
+};
 
 const Events = () => {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
-  const [events, setEvents] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(50);
-  const [filter, setFilter] = useState('');
-  const [toast, setToast] = useState({ open: false, severity: 'success', message: '' });
+  const toast = useToast();
+  const [machineId, setMachineId] = useState('');
+  const [decision, setDecision] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [machines, setMachines] = useState([]);
+
+  // Only send filters that are set; a stable object keyed on the raw values
+  // keeps the hook from refetching on unrelated renders.
+  const extraParams = useMemo(() => {
+    const params = {};
+    if (machineId) params.machine_id = machineId;
+    if (decision) params.decision = decision;
+    if (from) params.from = from;
+    if (to) params.to = to;
+    return params;
+  }, [machineId, decision, from, to]);
+
+  const {
+    items: events,
+    total,
+    page,
+    perPage,
+    search,
+    loading,
+    error,
+    setPage,
+    setPerPage,
+    setSearch,
+    refresh,
+  } = usePagedQuery('/api/events', extraParams);
+
+  useEffect(() => {
+    let active = true;
+    apiClient
+      .get('/api/machines')
+      .then((response) => {
+        if (active && Array.isArray(response.data)) setMachines(response.data);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleAllowlist = async (identifier, ruleType, comment) => {
     try {
-      await createRule({ identifier, rule_type: ruleType, policy: 'ALLOWLIST', comment: comment || '' });
-      setToast({ open: true, severity: 'success', message: `Allowlisted ${ruleType}` });
-    } catch (error) {
-      setToast({
-        open: true,
-        severity: 'error',
-        message: error.response?.data?.error || 'Failed to allowlist',
+      await apiClient.post('/api/rules', {
+        identifier,
+        rule_type: ruleType,
+        policy: 'ALLOWLIST',
+        comment: comment || '',
       });
-    }
-  };
-
-  const loadEvents = async () => {
-    try {
-      const response = await getEvents({
-        page: page + 1,
-        limit: rowsPerPage,
-        decision: filter,
-      });
-      setEvents(response.data.events || []);
-      setTotal(response.data.total || 0);
-    } catch (error) {
-      console.error('Failed to load events:', error);
-    }
-  };
-
-  useEffect(() => {
-    loadEvents();
-  }, [page, rowsPerPage, filter]);
-
-  const handleChangePage = (event, newPage) => {
-    setPage(newPage);
-  };
-
-  const handleChangeRowsPerPage = (event) => {
-    setRowsPerPage(parseInt(event.target.value, 10));
-    setPage(0);
-  };
-
-  const getDecisionColor = (decision) => {
-    switch (decision) {
-      case 'ALLOW':
-        return 'success';
-      case 'BLOCK':
-        return 'error';
-      default:
-        return 'default';
+      toast.success(`Allowlisted ${ruleType}`);
+      refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to allowlist');
     }
   };
 
   const handleCreateRule = (event) => {
-    // Navigate to proposals page with every identifier this event carries so
-    // the proposal form can switch rule type and auto-fill the right one.
-    const params = new URLSearchParams({
-      hash: event.file_hash
-    });
+    // Carry every identifier the event holds so the proposal form can switch
+    // rule type and auto-fill the right one.
+    const params = new URLSearchParams({ hash: event.file_hash });
     if (event.cert_sha256) params.append('cert_sha256', event.cert_sha256);
     if (event.signing_id) params.append('signing_id', event.signing_id);
     if (event.team_id) params.append('team_id', event.team_id);
-
-    // Add bundle name or bundle ID as comment if available
     if (event.bundle_name) {
       params.append('comment', event.bundle_name);
     } else if (event.bundle_id) {
       params.append('comment', event.bundle_id);
     }
-
     navigate(`/proposals?${params.toString()}`);
   };
 
+  const clearFilters = () => {
+    setMachineId('');
+    setDecision('');
+    setFrom('');
+    setTo('');
+  };
+
+  // Mirror the live filters and search onto the CSV export link.
+  const exportHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (machineId) params.set('machine_id', machineId);
+    if (decision) params.set('decision', decision);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const qs = params.toString();
+    return `${apiBase}/api/events/export${qs ? `?${qs}` : ''}`;
+  }, [search, machineId, decision, from, to]);
+
+  const columns = [
+    {
+      key: 'execution_time',
+      label: 'Timestamp',
+      render: (row) => formatDateTime(row.execution_time),
+    },
+    { key: 'machine_id', label: 'Machine' },
+    {
+      key: 'file_path',
+      label: 'File Path',
+      render: (row) => (
+        <Typography
+          variant="body2"
+          sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
+        >
+          {row.file_path}
+        </Typography>
+      ),
+    },
+    {
+      key: 'file_hash',
+      label: 'SHA256 Hash',
+      render: (row) => (
+        <Typography
+          variant="body2"
+          sx={{
+            fontFamily: 'monospace',
+            fontSize: '0.7rem',
+            wordBreak: 'break-all',
+            maxWidth: '400px',
+          }}
+        >
+          {row.file_hash}
+        </Typography>
+      ),
+    },
+    {
+      key: 'decision',
+      label: 'Decision',
+      render: (row) => (
+        <Chip
+          label={row.decision}
+          color={getDecisionColor(row.decision)}
+          size="small"
+        />
+      ),
+    },
+    { key: 'executing_user', label: 'User' },
+    {
+      key: 'bundle',
+      label: 'Bundle',
+      render: (row) =>
+        row.bundle_name ? (
+          <>
+            <Typography variant="body2">{row.bundle_name}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {row.bundle_id}
+            </Typography>
+          </>
+        ) : null,
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (row) => (
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Tooltip title="Propose a rule for this binary">
+            <IconButton
+              size="small"
+              color="primary"
+              aria-label="propose rule"
+              onClick={() => handleCreateRule(row)}
+            >
+              <AddCircleIcon />
+            </IconButton>
+          </Tooltip>
+          {isAdmin() && row.team_id && (
+            <Button
+              size="small"
+              variant="outlined"
+              color="success"
+              onClick={() =>
+                handleAllowlist(
+                  row.team_id,
+                  'TEAMID',
+                  row.bundle_name || row.file_path
+                )
+              }
+            >
+              Team ID
+            </Button>
+          )}
+          {isAdmin() && row.cert_sha256 && (
+            <Button
+              size="small"
+              variant="outlined"
+              color="success"
+              onClick={() =>
+                handleAllowlist(
+                  row.cert_sha256,
+                  'CERTIFICATE',
+                  row.cert_cn || row.bundle_name
+                )
+              }
+            >
+              Cert
+            </Button>
+          )}
+        </Stack>
+      ),
+    },
+  ];
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Execution Events</Typography>
+      <PageHeader title="Execution Events" />
+
+      <Stack
+        direction="row"
+        spacing={2}
+        sx={{ mb: 2, flexWrap: 'wrap', gap: 2 }}
+        alignItems="center"
+      >
         <TextField
           select
-          label="Filter by Decision"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          sx={{ minWidth: 150 }}
+          label="Decision"
+          value={decision}
+          onChange={(e) => setDecision(e.target.value)}
           size="small"
+          sx={{ minWidth: 150 }}
         >
           <MenuItem value="">All</MenuItem>
           <MenuItem value="ALLOW">Allow</MenuItem>
           <MenuItem value="BLOCK">Block</MenuItem>
         </TextField>
-      </Box>
-
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Timestamp</TableCell>
-              <TableCell>Machine</TableCell>
-              <TableCell>File Path</TableCell>
-              <TableCell>SHA256 Hash</TableCell>
-              <TableCell>Decision</TableCell>
-              <TableCell>User</TableCell>
-              <TableCell>Bundle</TableCell>
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {events.map((event) => (
-              <TableRow key={event.id}>
-                <TableCell>
-                  {new Date(event.execution_time).toLocaleString()}
-                </TableCell>
-                <TableCell>{event.machine_id}</TableCell>
-                <TableCell>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                    {event.file_path}
-                  </Typography>
-                </TableCell>
-                <TableCell>
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontFamily: 'monospace',
-                      fontSize: '0.7rem',
-                      wordBreak: 'break-all',
-                      maxWidth: '400px'
-                    }}
-                  >
-                    {event.file_hash}
-                  </Typography>
-                </TableCell>
-                <TableCell>
-                  <Chip
-                    label={event.decision}
-                    color={getDecisionColor(event.decision)}
-                    size="small"
-                  />
-                </TableCell>
-                <TableCell>{event.executing_user}</TableCell>
-                <TableCell>
-                  {event.bundle_name && (
-                    <>
-                      <Typography variant="body2">{event.bundle_name}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {event.bundle_id}
-                      </Typography>
-                    </>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Tooltip title="Propose a rule for this binary">
-                      <IconButton
-                        size="small"
-                        color="primary"
-                        onClick={() => handleCreateRule(event)}
-                      >
-                        <AddCircleIcon />
-                      </IconButton>
-                    </Tooltip>
-                    {isAdmin() && event.team_id && (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        color="success"
-                        onClick={() => handleAllowlist(event.team_id, 'TEAMID', event.bundle_name || event.file_path)}
-                      >
-                        Team ID
-                      </Button>
-                    )}
-                    {isAdmin() && event.cert_sha256 && (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        color="success"
-                        onClick={() => handleAllowlist(event.cert_sha256, 'CERTIFICATE', event.cert_cn || event.bundle_name)}
-                      >
-                        Cert
-                      </Button>
-                    )}
-                  </Stack>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <TablePagination
-          rowsPerPageOptions={[25, 50, 100]}
-          component="div"
-          count={total}
-          rowsPerPage={rowsPerPage}
-          page={page}
-          onPageChange={handleChangePage}
-          onRowsPerPageChange={handleChangeRowsPerPage}
+        <TextField
+          select
+          label="Machine"
+          value={machineId}
+          onChange={(e) => setMachineId(e.target.value)}
+          size="small"
+          sx={{ minWidth: 200 }}
+        >
+          <MenuItem value="">All</MenuItem>
+          {machines.map((m) => (
+            <MenuItem key={m.machine_id} value={m.machine_id}>
+              {m.hostname || m.machine_id}
+            </MenuItem>
+          ))}
+        </TextField>
+        <TextField
+          label="From"
+          type="date"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+          size="small"
+          slotProps={{ inputLabel: { shrink: true } }}
         />
-      </TableContainer>
+        <TextField
+          label="To"
+          type="date"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          size="small"
+          slotProps={{ inputLabel: { shrink: true } }}
+        />
+        <Button onClick={clearFilters}>Clear filters</Button>
+      </Stack>
 
-      <Snackbar
-        open={toast.open}
-        autoHideDuration={4000}
-        onClose={() => setToast({ ...toast, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={toast.severity} onClose={() => setToast({ ...toast, open: false })}>
-          {toast.message}
-        </Alert>
-      </Snackbar>
+      <DataTable
+        columns={columns}
+        rows={events}
+        total={total}
+        page={page}
+        perPage={perPage}
+        onPageChange={setPage}
+        onPerPageChange={setPerPage}
+        loading={loading}
+        error={error}
+        onRetry={refresh}
+        emptyMessage="No events found"
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search events..."
+        toolbarActions={
+          <Button
+            component="a"
+            href={exportHref}
+            download
+            startIcon={<DownloadIcon />}
+            variant="outlined"
+          >
+            Export CSV
+          </Button>
+        }
+      />
     </Box>
   );
 };

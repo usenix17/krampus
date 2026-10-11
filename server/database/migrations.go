@@ -1,13 +1,134 @@
 package database
 
 import (
+	"database/sql"
+	"fmt"
 	"log"
 )
 
-// RunMigrations creates all tables and applies schema updates
+type migration struct {
+	version int
+	name    string
+	up      func(*sql.Tx) error
+}
+
+// migrations run in order inside one transaction each; the version row is
+// recorded in the same transaction. Never reorder or edit a shipped entry --
+// append a new one instead.
+var migrations = []migration{
+	{1, "baseline schema", migrateBaseline},
+	{2, "dedupe rules, unique (identifier, rule_type)", migrateDedupeRules},
+	{3, "ensure rules.comment, backfill custom_message", migrateRuleCommentAndBackfill},
+	{4, "performance indexes", migratePerfIndexes},
+	{5, "normalize events.execution_time to UTC", migrateNormalizeEventTimes},
+	{6, "normalize sessions.expires_at to UTC", migrateNormalizeSessionExpiry},
+}
+
+// RunMigrations applies pending migrations. Databases created before the
+// versioned runner existed (schema_migrations absent but users present) adopt
+// the baseline as already applied, then receive everything newer.
+//
+// Assumes a single server process migrates a given file at a time: if two
+// race, SQLite serializes the writes and the loser fails its boot on the
+// version PRIMARY KEY, leaving the database consistent.
 func RunMigrations() error {
-	migrations := []string{
-		// Create users table with all required fields
+	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+
+	applied := map[int]bool{}
+	rows, err := DB.Query(`SELECT version FROM schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("query schema_migrations: %w", err)
+	}
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan schema_migrations version: %w", err)
+		}
+		applied[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate schema_migrations: %w", err)
+	}
+	rows.Close()
+
+	if len(applied) == 0 {
+		legacy, err := tableExists("users")
+		if err != nil {
+			return fmt.Errorf("check for legacy schema: %w", err)
+		}
+		if legacy {
+			if _, err := DB.Exec(
+				`INSERT INTO schema_migrations (version, name) VALUES (1, 'baseline schema (adopted)')`,
+			); err != nil {
+				return fmt.Errorf("adopt legacy baseline: %w", err)
+			}
+			applied[1] = true
+			log.Println("Adopted pre-migration database as baseline (version 1)")
+		}
+	}
+
+	return applyMigrations(migrations, applied)
+}
+
+// applyMigrations runs each pending migration in its own transaction,
+// recording the version row in the same transaction.
+func applyMigrations(list []migration, applied map[int]bool) error {
+	for _, m := range list {
+		if applied[m.version] {
+			continue
+		}
+		tx, err := DB.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration %d: %w", m.version, err)
+		}
+		if err := m.up(tx); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("migration %d (%s): %w", m.version, m.name, err)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, m.version, m.name,
+		); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record migration %d: %w", m.version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d: %w", m.version, err)
+		}
+		log.Printf("Applied migration %d: %s", m.version, m.name)
+	}
+	return nil
+}
+
+func tableExists(name string) (bool, error) {
+	var n int
+	err := DB.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name,
+	).Scan(&n)
+	return n > 0, err
+}
+
+func execAll(tx *sql.Tx, stmts ...string) error {
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("%w\nquery: %s", err, s)
+		}
+	}
+	return nil
+}
+
+// migrateBaseline creates the full schema as it existed before the versioned
+// migration runner. The rules table additionally gains the comment column
+// that used to be patched on via addColumnIfNotExists.
+func migrateBaseline(tx *sql.Tx) error {
+	return execAll(tx,
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT NOT NULL UNIQUE,
@@ -19,7 +140,6 @@ func RunMigrations() error {
 			last_login DATETIME
 		);`,
 
-		// Create machines table with all metadata fields
 		`CREATE TABLE IF NOT EXISTS machines (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			machine_id TEXT NOT NULL UNIQUE,
@@ -34,7 +154,6 @@ func RunMigrations() error {
 			last_preflight_sync DATETIME
 		);`,
 
-		// Create proposals table for voting system
 		`CREATE TABLE IF NOT EXISTS proposals (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			identifier TEXT NOT NULL,
@@ -50,7 +169,6 @@ func RunMigrations() error {
 			FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 
-		// Create votes table
 		`CREATE TABLE IF NOT EXISTS votes (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL,
@@ -62,13 +180,13 @@ func RunMigrations() error {
 			FOREIGN KEY (proposal_id) REFERENCES proposals(id) ON DELETE CASCADE
 		);`,
 
-		// Create rules table with proposal tracking
 		`CREATE TABLE IF NOT EXISTS rules (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			identifier TEXT NOT NULL,
 			policy TEXT NOT NULL CHECK(policy IN ('ALLOWLIST', 'BLOCKLIST')),
 			rule_type TEXT NOT NULL CHECK(rule_type IN ('BINARY', 'CERTIFICATE', 'SIGNINGID', 'TEAMID', 'CDHASH')),
 			custom_message TEXT,
+			comment TEXT,
 			created_by INTEGER,
 			proposal_id INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -76,7 +194,6 @@ func RunMigrations() error {
 			FOREIGN KEY (proposal_id) REFERENCES proposals(id) ON DELETE SET NULL
 		);`,
 
-		// Create events table with comprehensive Santa event data
 		`CREATE TABLE IF NOT EXISTS events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			machine_id TEXT NOT NULL,
@@ -97,7 +214,6 @@ func RunMigrations() error {
 			FOREIGN KEY (machine_id) REFERENCES machines(machine_id) ON DELETE CASCADE
 		);`,
 
-		// Create sessions table for JWT tracking
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL,
@@ -107,7 +223,6 @@ func RunMigrations() error {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 
-		// Create indices for performance
 		`CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_proposals_created_by ON proposals(created_by);`,
 		`CREATE INDEX IF NOT EXISTS idx_votes_proposal ON votes(proposal_id);`,
@@ -120,68 +235,66 @@ func RunMigrations() error {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_users_oidc_subject ON users(oidc_subject);`,
 		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);`,
-	}
+	)
+}
 
-	// Execute each migration
-	for _, migration := range migrations {
-		if _, err := DB.Exec(migration); err != nil {
-			log.Printf("Migration failed: %v\nQuery: %s\n", err, migration)
+func migrateDedupeRules(tx *sql.Tx) error {
+	return execAll(tx,
+		`DELETE FROM rules WHERE id NOT IN (
+			SELECT MAX(id) FROM rules GROUP BY identifier, rule_type)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_identifier_type
+			ON rules(identifier, rule_type)`,
+	)
+}
+
+// migrateRuleCommentAndBackfill backfills custom_message from comment for
+// voted rules. Databases abandoned before the comment column shipped lack it
+// entirely (the old code patched it on every boot), so add it first.
+func migrateRuleCommentAndBackfill(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('rules') WHERE name='comment'`,
+	).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := tx.Exec(`ALTER TABLE rules ADD COLUMN comment TEXT`); err != nil {
 			return err
 		}
 	}
-
-	// Add comment column to rules table if it doesn't exist
-	if err := addColumnIfNotExists("rules", "comment", "TEXT"); err != nil {
-		log.Printf("Failed to add comment column to rules: %v", err)
-		return err
-	}
-
-	// Collapse any pre-existing duplicate rules (keeping the newest) before
-	// enforcing uniqueness, otherwise the index creation would fail.
-	if _, err := DB.Exec(
-		`DELETE FROM rules
-		 WHERE id NOT IN (
-		   SELECT MAX(id) FROM rules GROUP BY identifier, rule_type
-		 );`,
-	); err != nil {
-		log.Printf("Failed to dedupe rules: %v", err)
-		return err
-	}
-
-	// Enforce one rule per (identifier, rule_type) so allowlisting is idempotent.
-	if _, err := DB.Exec(
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_identifier_type
-		 ON rules(identifier, rule_type);`,
-	); err != nil {
-		log.Printf("Failed to create unique rule index: %v", err)
-		return err
-	}
-
-	log.Println("All migrations completed successfully")
-	return nil
+	return execAll(tx,
+		`UPDATE rules SET custom_message = comment
+		 WHERE custom_message IS NULL AND proposal_id IS NOT NULL`,
+	)
 }
 
-// Helper function to check if a column exists
-func columnExists(tableName, columnName string) (bool, error) {
-	query := `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?;`
-	var count int
-	err := DB.QueryRow(query, tableName, columnName).Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
+func migratePerfIndexes(tx *sql.Tx) error {
+	return execAll(tx,
+		`CREATE INDEX IF NOT EXISTS idx_events_execution_time ON events(execution_time)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_decision ON events(decision)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
+	)
 }
 
-// Helper function to add column if it doesn't exist
-func addColumnIfNotExists(tableName, columnName, columnDef string) error {
-	exists, err := columnExists(tableName, columnName)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		query := `ALTER TABLE ` + tableName + ` ADD COLUMN ` + columnName + ` ` + columnDef + `;`
-		_, err = DB.Exec(query)
-		return err
-	}
-	return nil
+// migrateNormalizeEventTimes rewrites execution_time values that carry a
+// timezone-offset suffix (the Go driver's time.Time serialization) to bare
+// UTC. datetime() normalizes offset formats, passes bare rows through
+// unchanged, and returns NULL for garbage, which the WHERE guard skips.
+func migrateNormalizeEventTimes(tx *sql.Tx) error {
+	return execAll(tx,
+		`UPDATE events SET execution_time = datetime(execution_time)
+		 WHERE datetime(execution_time) IS NOT NULL`,
+	)
+}
+
+// migrateNormalizeSessionExpiry rewrites sessions.expires_at values that
+// carry a timezone-offset suffix (the Go driver's time.Time serialization)
+// to bare UTC. datetime() normalizes offset formats, passes bare rows
+// through unchanged, and returns NULL for garbage, which the WHERE guard
+// skips.
+func migrateNormalizeSessionExpiry(tx *sql.Tx) error {
+	return execAll(tx,
+		`UPDATE sessions SET expires_at = datetime(expires_at)
+		 WHERE datetime(expires_at) IS NOT NULL`,
+	)
 }

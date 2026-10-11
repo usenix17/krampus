@@ -48,11 +48,14 @@ func GenerateToken(user *models.User) (string, error) {
 		return "", err
 	}
 
-	// Store session in database for revocation capability
+	// Store session in database for revocation capability. Bind bare UTC to
+	// match datetime('now') used in ValidateToken/CleanupExpiredSessions --
+	// the driver's default time.Time serialization appends a local offset,
+	// which compares incorrectly against bare-UTC lexical comparisons.
 	tokenHash := hashToken(tokenString)
 	_, err = database.DB.Exec(
 		`INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)`,
-		user.ID, tokenHash, expiresAt,
+		user.ID, tokenHash, expiresAt.UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to store session: %w", err)
@@ -97,12 +100,6 @@ func ValidateToken(tokenString string) (*Claims, error) {
 func RevokeToken(tokenString string) error {
 	tokenHash := hashToken(tokenString)
 	_, err := database.DB.Exec(`DELETE FROM sessions WHERE token_hash = ?`, tokenHash)
-	return err
-}
-
-// RevokeUserSessions revokes all sessions for a user
-func RevokeUserSessions(userID int64) error {
-	_, err := database.DB.Exec(`DELETE FROM sessions WHERE user_id = ?`, userID)
 	return err
 }
 

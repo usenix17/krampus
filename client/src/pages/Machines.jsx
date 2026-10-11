@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
   Button,
@@ -20,11 +21,16 @@ import {
 import { Add as AddIcon, Refresh as RefreshIcon, Download as DownloadIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import apiClient from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import PageHeader from '../components/PageHeader';
+import { formatDateTime } from '../utils/datetime';
 
 const Machines = () => {
   const { isAdmin } = useAuth();
+  const toast = useToast();
   const [machines, setMachines] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [openRegister, setOpenRegister] = useState(false);
   const [openMobileConfig, setOpenMobileConfig] = useState(false);
   const [selectedMachine, setSelectedMachine] = useState(null);
@@ -33,37 +39,36 @@ const Machines = () => {
     client_mode: 'MONITOR',
     upload_interval: 600,
     organization_name: '',
-    machine_owner: ''
+    machine_owner: '',
   });
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
-  const fetchMachines = async () => {
+  // The machines endpoint returns a bare array (not paginated).
+  const fetchMachines = useCallback(async () => {
+    setLoading(true);
+    setError('');
     try {
       const response = await apiClient.get('/api/machines');
-      setMachines(response.data);
-    } catch (error) {
-      console.error('Failed to fetch machines:', error);
+      setMachines(Array.isArray(response.data) ? response.data : []);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to fetch machines');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchMachines();
-  }, []);
+  }, [fetchMachines]);
 
   const handleRegister = async () => {
     try {
       await apiClient.post('/api/machines', registerData);
-      setSuccess('Machine registered successfully!');
+      toast.success('Machine registered successfully!');
       setOpenRegister(false);
       setRegisterData({ machine_id: '', serial_number: '' });
       fetchMachines();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to register machine');
-      setTimeout(() => setError(''), 5000);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to register machine');
     }
   };
 
@@ -83,12 +88,10 @@ const Machines = () => {
       link.click();
       link.remove();
 
-      setSuccess('Mobileconfig downloaded successfully!');
+      toast.success('Mobileconfig downloaded successfully!');
       setOpenMobileConfig(false);
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError('Failed to generate mobileconfig');
-      setTimeout(() => setError(''), 5000);
+    } catch {
+      toast.error('Failed to generate mobileconfig');
     }
   };
 
@@ -96,44 +99,77 @@ const Machines = () => {
     if (!window.confirm('Are you sure you want to delete this machine?')) return;
     try {
       await apiClient.delete(`/api/machines/${machineId}`);
-      setSuccess('Machine deleted successfully!');
+      toast.success('Machine deleted successfully!');
       fetchMachines();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Failed to delete machine');
-      setTimeout(() => setError(''), 5000);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete machine');
     }
+  };
+
+  // Clearing the number field yields NaN; keep the previous value in that case.
+  const handleUploadIntervalChange = (value) => {
+    const parsed = parseInt(value, 10);
+    setMobileConfigData((prev) => ({
+      ...prev,
+      upload_interval: Number.isNaN(parsed) ? prev.upload_interval : parsed,
+    }));
   };
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Machines</Typography>
-        <Box>
-          <IconButton onClick={fetchMachines} sx={{ mr: 1 }}>
-            <RefreshIcon />
-          </IconButton>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpenRegister(true)}>
-            Register Machine
-          </Button>
-        </Box>
-      </Box>
+      <PageHeader
+        title="Machines"
+        actions={
+          <>
+            <IconButton aria-label="refresh machines" onClick={fetchMachines} sx={{ mr: 1 }}>
+              <RefreshIcon />
+            </IconButton>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpenRegister(true)}>
+              Register Machine
+            </Button>
+          </>
+        }
+      />
 
-      {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={fetchMachines}>
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
+      )}
 
       {loading ? (
         <LinearProgress />
+      ) : machines.length === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+          No machines found
+        </Typography>
       ) : (
         <Grid container spacing={2}>
           {machines.map((machine) => (
-            <Grid item xs={12} md={6} key={machine.id}>
+            <Grid size={{ xs: 12, md: 6 }} key={machine.id}>
               <Card>
                 <CardContent>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                    <Typography variant="h6">{machine.machine_id}</Typography>
+                    <Typography
+                      variant="h6"
+                      component={RouterLink}
+                      to={`/machines/${machine.id}`}
+                      aria-label={`view ${machine.hostname || machine.machine_id} details`}
+                      sx={{ color: 'inherit', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+                    >
+                      {machine.hostname || machine.machine_id}
+                    </Typography>
                     {isAdmin() && (
                       <IconButton
+                        aria-label="delete machine"
                         onClick={() => handleDelete(machine.id)}
                         color="error"
                         size="small"
@@ -168,7 +204,7 @@ const Machines = () => {
                     )}
                     {machine.last_sync && (
                       <Typography variant="caption" color="text.secondary">
-                        Last sync: {new Date(machine.last_sync).toLocaleString()}
+                        Last sync: {formatDateTime(machine.last_sync)}
                       </Typography>
                     )}
                   </Box>
@@ -240,7 +276,7 @@ const Machines = () => {
             type="number"
             label="Upload Interval (seconds)"
             value={mobileConfigData.upload_interval}
-            onChange={(e) => setMobileConfigData({ ...mobileConfigData, upload_interval: parseInt(e.target.value) })}
+            onChange={(e) => handleUploadIntervalChange(e.target.value)}
             margin="normal"
           />
           <TextField
