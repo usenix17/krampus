@@ -11,7 +11,46 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	syncv1 "github.com/northpolesec/protos/sync"
+	"google.golang.org/protobuf/proto"
 )
+
+// protobufContentType is Santa's default event-upload transport.
+const protobufContentType = "application/x-protobuf"
+
+// eventRecord is the storage-neutral event shape both the JSON and protobuf
+// upload branches converge on, keeping a single INSERT path.
+type eventRecord struct {
+	FilePath          string
+	FileHash          string
+	ExecutionTime     string // bare UTC, see storeEvent
+	Decision          string
+	ExecutingUser     string
+	CertSHA256        string
+	CertCN            string
+	BundleID          string
+	BundleName        string
+	BundlePath        string
+	SigningID         string
+	TeamID            string
+	QuarantineDataURL string
+}
+
+// storeEvent inserts one event. ExecutionTime is stored as a bare UTC string so
+// it compares correctly against datetime('now', ...) and the format used
+// elsewhere; binding a time.Time would append a timezone offset.
+func storeEvent(machineID string, e eventRecord) error {
+	_, err := database.DB.Exec(
+		`INSERT INTO events (machine_id, file_path, file_hash, execution_time, decision,
+		                     executing_user, cert_sha256, cert_cn, bundle_id, bundle_name,
+		                     bundle_path, signing_id, team_id, quarantine_data_url)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		machineID, e.FilePath, e.FileHash, e.ExecutionTime, e.Decision,
+		e.ExecutingUser, e.CertSHA256, e.CertCN, e.BundleID, e.BundleName,
+		e.BundlePath, e.SigningID, e.TeamID, e.QuarantineDataURL,
+	)
+	return err
+}
 
 // Preflight handles the Santa preflight request
 func Preflight(c *gin.Context) {
@@ -118,21 +157,25 @@ func Preflight(c *gin.Context) {
 func EventUpload(c *gin.Context) {
 	machineID := c.Param("machine_id")
 
-	// Try JSON first
+	// Santa's default transport is protobuf. octet-stream is accepted as a
+	// lenient alias some clients emit.
+	ct := c.ContentType()
+	if strings.Contains(ct, "protobuf") || strings.Contains(ct, "octet-stream") {
+		eventUploadProtobuf(c, machineID)
+		return
+	}
+
 	var input struct {
 		Events []models.SantaEvent `json:"events"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
-		// Non-JSON body is almost certainly protobuf. Decoding protobuf event
-		// uploads is not yet implemented, so these events are acknowledged but
-		// not stored. Reconfigure Santa with EventLogType=json (redownload the
-		// mobileconfig from the Krampus UI) to capture events until then.
-		log.Printf("WARNING: EventUpload from %s is non-JSON (Content-Type=%s, Content-Encoding=%s); "+
-			"protobuf decoding is not implemented, events not stored. Set EventLogType=json in Santa.",
+		// Neither protobuf nor valid JSON. Acknowledge so Santa keeps syncing,
+		// but there is nothing to store.
+		log.Printf("WARNING: EventUpload from %s is not JSON or protobuf (Content-Type=%s, "+
+			"Content-Encoding=%s); events not stored.",
 			machineID, c.GetHeader("Content-Type"), c.GetHeader("Content-Encoding"))
 
-		// Return success anyway - Santa needs a 200 response to continue syncing
 		c.JSON(http.StatusOK, gin.H{
 			"event_upload_bundle_binaries": []string{},
 		})
@@ -141,25 +184,25 @@ func EventUpload(c *gin.Context) {
 
 	log.Printf("EventUpload: Received %d JSON events from %s", len(input.Events), machineID)
 
-	// Insert JSON events into database
 	eventCount := 0
 	for _, event := range input.Events {
-		// Bind execution_time as a bare UTC string: binding a time.Time makes
-		// the driver append a timezone offset, which breaks lexical comparison
-		// against datetime('now', ...) and the bare format used everywhere else.
 		execTime := time.Unix(int64(event.ExecutionTime), 0).UTC().Format("2006-01-02 15:04:05")
-
-		_, err := database.DB.Exec(
-			`INSERT INTO events (machine_id, file_path, file_hash, execution_time, decision,
-			                     executing_user, cert_sha256, cert_cn, bundle_id, bundle_name,
-			                     bundle_path, signing_id, team_id, quarantine_data_url)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			machineID, event.FilePath, event.FileSHA256, execTime, event.Decision,
-			event.ExecutingUser, event.CertificateSHA256, event.CertificateCN,
-			event.BundleID, event.BundleName, event.BundlePath,
-			event.SigningID, event.TeamID, event.QuarantineDataURL,
-		)
-		if err != nil {
+		rec := eventRecord{
+			FilePath:          event.FilePath,
+			FileHash:          event.FileSHA256,
+			ExecutionTime:     execTime,
+			Decision:          event.Decision,
+			ExecutingUser:     event.ExecutingUser,
+			CertSHA256:        event.CertificateSHA256,
+			CertCN:            event.CertificateCN,
+			BundleID:          event.BundleID,
+			BundleName:        event.BundleName,
+			BundlePath:        event.BundlePath,
+			SigningID:         event.SigningID,
+			TeamID:            event.TeamID,
+			QuarantineDataURL: event.QuarantineDataURL,
+		}
+		if err := storeEvent(machineID, rec); err != nil {
 			log.Printf("Failed to insert event: %v", err)
 			continue
 		}
@@ -168,10 +211,83 @@ func EventUpload(c *gin.Context) {
 
 	log.Printf("EventUpload: Successfully stored %d events from %s", eventCount, machineID)
 
-	// Return acknowledgement
 	c.JSON(http.StatusOK, gin.H{
 		"event_upload_bundle_binaries": []string{},
 	})
+}
+
+// eventUploadProtobuf decodes a Santa EventUploadRequest and stores its events
+// through the same path as the JSON branch, replying with a protobuf
+// EventUploadResponse.
+func eventUploadProtobuf(c *gin.Context, machineID string) {
+	body, err := c.GetRawData()
+	if err != nil {
+		log.Printf("EventUpload: failed to read protobuf body from %s: %v", machineID, err)
+		c.Data(http.StatusOK, protobufContentType, mustMarshal(&syncv1.EventUploadResponse{}))
+		return
+	}
+
+	var req syncv1.EventUploadRequest
+	if err := proto.Unmarshal(body, &req); err != nil {
+		log.Printf("EventUpload: failed to unmarshal protobuf from %s: %v", machineID, err)
+		c.Data(http.StatusOK, protobufContentType, mustMarshal(&syncv1.EventUploadResponse{}))
+		return
+	}
+
+	log.Printf("EventUpload: Received %d protobuf events from %s", len(req.GetEvents()), machineID)
+
+	eventCount := 0
+	for _, event := range req.GetEvents() {
+		// execution_time is Unix seconds; fall back to now when absent.
+		execTime := time.Now().UTC().Format("2006-01-02 15:04:05")
+		if ts := event.GetExecutionTime(); ts > 0 {
+			execTime = time.Unix(int64(ts), 0).UTC().Format("2006-01-02 15:04:05")
+		}
+
+		// The signing chain is leaf-first; the leaf certificate identifies the
+		// binary's signer.
+		var certSHA, certCN string
+		if chain := event.GetSigningChain(); len(chain) > 0 {
+			certSHA = chain[0].GetSha256()
+			certCN = chain[0].GetCn()
+		}
+
+		rec := eventRecord{
+			FilePath:          event.GetFilePath(),
+			FileHash:          event.GetFileSha256(),
+			ExecutionTime:     execTime,
+			Decision:          event.GetDecision().String(),
+			ExecutingUser:     event.GetExecutingUser(),
+			CertSHA256:        certSHA,
+			CertCN:            certCN,
+			BundleID:          event.GetFileBundleId(),
+			BundleName:        event.GetFileBundleName(),
+			BundlePath:        event.GetFileBundlePath(),
+			SigningID:         event.GetSigningId(),
+			TeamID:            event.GetTeamId(),
+			QuarantineDataURL: event.GetQuarantineDataUrl(),
+		}
+		if err := storeEvent(machineID, rec); err != nil {
+			log.Printf("Failed to insert event: %v", err)
+			continue
+		}
+		eventCount++
+	}
+
+	log.Printf("EventUpload: Successfully stored %d events from %s", eventCount, machineID)
+
+	c.Data(http.StatusOK, protobufContentType, mustMarshal(&syncv1.EventUploadResponse{}))
+}
+
+// mustMarshal encodes a protobuf message, returning empty bytes on the
+// practically impossible error so the handler can always answer.
+func mustMarshal(m proto.Message) []byte {
+	out, err := proto.Marshal(m)
+	if err != nil {
+		log.Printf("EventUpload: failed to marshal protobuf response: %v", err)
+		return nil
+	}
+	return out
 }
 
 // RuleDownload handles Santa rule download requests
