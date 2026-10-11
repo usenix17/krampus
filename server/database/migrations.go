@@ -21,6 +21,7 @@ var migrations = []migration{
 	{3, "ensure rules.comment, backfill custom_message", migrateRuleCommentAndBackfill},
 	{4, "performance indexes", migratePerfIndexes},
 	{5, "normalize events.execution_time to UTC", migrateNormalizeEventTimes},
+	{6, "normalize sessions.expires_at to UTC", migrateNormalizeSessionExpiry},
 }
 
 // RunMigrations applies pending migrations. Databases created before the
@@ -283,5 +284,17 @@ func migrateNormalizeEventTimes(tx *sql.Tx) error {
 	return execAll(tx,
 		`UPDATE events SET execution_time = datetime(execution_time)
 		 WHERE datetime(execution_time) IS NOT NULL`,
+	)
+}
+
+// migrateNormalizeSessionExpiry rewrites sessions.expires_at values that
+// carry a timezone-offset suffix (the Go driver's time.Time serialization)
+// to bare UTC. datetime() normalizes offset formats, passes bare rows
+// through unchanged, and returns NULL for garbage, which the WHERE guard
+// skips.
+func migrateNormalizeSessionExpiry(tx *sql.Tx) error {
+	return execAll(tx,
+		`UPDATE sessions SET expires_at = datetime(expires_at)
+		 WHERE datetime(expires_at) IS NOT NULL`,
 	)
 }

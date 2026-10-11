@@ -246,6 +246,44 @@ func TestMigrationNormalizesEventExecutionTime(t *testing.T) {
 	}
 }
 
+// Session rows written before the UTC fix carry a timezone-offset suffix
+// (the Go sqlite driver's time.Time serialization of sessions.expires_at).
+// Migration 6 must normalize them to bare UTC so the lexical comparisons in
+// ValidateToken and CleanupExpiredSessions are sound.
+func TestMigrationNormalizesSessionExpiry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-session-offsets.db")
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(legacySchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO users (id, username, role) VALUES (1, 'alice', 'USER')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO sessions (user_id, token_hash, expires_at)
+		VALUES (1, 'hash-offset', '2026-10-12 11:59:05.17-05:00')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	if err := Initialize(dbPath); err != nil {
+		t.Fatalf("Initialize legacy with offset session expiry: %v", err)
+	}
+	t.Cleanup(func() { Close() })
+
+	var stored string
+	if err := DB.QueryRow(
+		`SELECT CAST(expires_at AS TEXT) FROM sessions WHERE token_hash = 'hash-offset'`,
+	).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "2026-10-12 16:59:05" {
+		t.Errorf("offset session expiry normalized to %q, want 2026-10-12 16:59:05 (UTC)", stored)
+	}
+}
+
 // A migration that fails partway must roll back its DDL and leave no version
 // row, and a later corrected run of the same version must apply cleanly.
 func TestFailedMigrationRollsBack(t *testing.T) {
