@@ -9,20 +9,29 @@ import (
 
 // CORSMiddleware handles CORS for frontend requests.
 //
-// Credentials (cookies) are only permitted for explicitly allow-listed origins
-// via CORS_ALLOWED_ORIGINS. When no origins are configured we fall back to a
-// wildcard WITHOUT credentials, which is safe because the browser will refuse
-// to attach cookies. This avoids the invalid/unsafe "*" + credentials pairing.
+// Credentials (cookies) are only permitted for origins that exactly match an
+// entry in CORS_ALLOWED_ORIGINS. A "*" entry in that list still enables a
+// permissive fallback for non-matching origins, but it is never combined
+// with Access-Control-Allow-Credentials -- a wildcard origin is never
+// reflected with credentials, matching the credential-less fallback used
+// when no allow-list is configured at all.
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		allowed := config.AppConfig.CORSAllowedOrigins
 
 		if len(allowed) > 0 {
-			if originAllowed(origin, allowed) {
+			// The response differs by Origin on every branch (reflect,
+			// wildcard fallback, deny), so caches must always vary on it.
+			c.Writer.Header().Add("Vary", "Origin")
+			switch {
+			case originMatchesExactly(origin, allowed):
 				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-				c.Writer.Header().Add("Vary", "Origin")
+			case containsWildcard(allowed):
+				// "*" in the allow-list: permissive but credential-less, same
+				// contract as the unconfigured fallback.
+				c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 			}
 		} else {
 			// No allow-list configured: permissive but credential-less.
@@ -41,9 +50,18 @@ func CORSMiddleware() gin.HandlerFunc {
 	}
 }
 
-func originAllowed(origin string, allowed []string) bool {
+func originMatchesExactly(origin string, allowed []string) bool {
 	for _, a := range allowed {
-		if a == "*" || a == origin {
+		if a != "*" && a == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func containsWildcard(allowed []string) bool {
+	for _, a := range allowed {
+		if a == "*" {
 			return true
 		}
 	}
