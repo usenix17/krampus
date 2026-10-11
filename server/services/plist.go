@@ -6,56 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// GeneratePlist generates a Santa configuration plist file
-func GeneratePlist(machineID, clientMode, syncBaseURL, machineOwner string, uploadInterval int) string {
-	// Convert client mode to integer
-	// 1 = MONITOR, 2 = LOCKDOWN
-	mode := 1
-	if clientMode == "LOCKDOWN" {
-		mode = 2
-	}
-
-	// Default machine owner if not provided
-	if machineOwner == "" {
-		machineOwner = "admin"
-	}
-
-	plistTemplate := `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>SyncBaseURL</key>
-	<string>%s</string>
-	<key>ClientMode</key>
-	<integer>%d</integer>
-	<key>MachineID</key>
-	<string>%s</string>
-	<key>MachineOwner</key>
-	<string>%s</string>
-	<key>FullSyncInterval</key>
-	<integer>%d</integer>
-	<key>EventLogType</key>
-	<string>json</string>
-	<key>EnableAllEventUpload</key>
-	<true/>
-	<key>EnablePageZeroProtection</key>
-	<true/>
-	<key>EnableBundles</key>
-	<true/>
-	<key>EnableTransitiveRules</key>
-	<false/>
-	<key>BannedBlockMessage</key>
-	<string>This application has been blocked by your security policy. Click below to request access.</string>
-	<key>EventDetailURL</key>
-	<string>%s/proposals?hash=%%file_identifier%%&amp;machine=%%machine_id%%</string>
-	<key>EventDetailText</key>
-	<string>Request Access</string>
-</dict>
-</plist>`
-
-	return fmt.Sprintf(plistTemplate, syncBaseURL, mode, machineID, machineOwner, uploadInterval, syncBaseURL)
-}
-
 // GenerateMobileConfig generates an Apple Configuration Profile (.mobileconfig)
 // for easy Santa configuration deployment
 func GenerateMobileConfig(machineID, clientMode, syncBaseURL, organizationName, machineOwner string, uploadInterval int) string {

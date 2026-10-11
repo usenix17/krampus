@@ -17,6 +17,7 @@ type Config struct {
 	OIDCClientSecret string
 	OIDCRedirectURL  string
 	OIDCScopes       []string
+	OIDCAllowHS256   bool // Permit HMAC-signed ID tokens verified with the client secret
 
 	// JWT Configuration
 	JWTSecret    string
@@ -58,6 +59,7 @@ func Load() *Config {
 		OIDCClientSecret: getEnv("OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8080/auth/callback"),
 		OIDCScopes:       strings.Split(getEnv("OIDC_SCOPES", "openid,profile,email"), ","),
+		OIDCAllowHS256:   strings.EqualFold(getEnv("OIDC_ALLOW_HS256", "false"), "true"),
 
 		// JWT
 		JWTSecret:    getEnv("JWT_SECRET", defaultJWTSecret),

@@ -3,6 +3,7 @@ package handlers
 import (
 	"krampus/server/database"
 	"krampus/server/models"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -74,7 +75,11 @@ func ListEvents(c *gin.Context) {
 	}
 
 	var total int
-	database.DB.QueryRow(countQuery, countArgs...).Scan(&total)
+	if err := database.DB.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+		log.Printf("Failed to count events: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch events"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"events": events,

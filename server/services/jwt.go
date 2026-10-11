@@ -100,12 +100,6 @@ func RevokeToken(tokenString string) error {
 	return err
 }
 
-// RevokeUserSessions revokes all sessions for a user
-func RevokeUserSessions(userID int64) error {
-	_, err := database.DB.Exec(`DELETE FROM sessions WHERE user_id = ?`, userID)
-	return err
-}
-
 // CleanupExpiredSessions removes expired sessions from the database
 func CleanupExpiredSessions() error {
 	_, err := database.DB.Exec(`DELETE FROM sessions WHERE expires_at < datetime('now')`)

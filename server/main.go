@@ -169,6 +169,7 @@ func main() {
 	santaGroup := router.Group("",
 		middleware.BodyLimitMiddleware(maxSantaBody),
 		middleware.SantaAuthMiddleware(),
+		middleware.ValidateMachineID(),
 		middleware.Decompress(),
 	)
 	{

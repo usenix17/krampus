@@ -68,52 +68,78 @@ func ExchangeCodeForToken(ctx context.Context, code string) (*oauth2.Token, erro
 	return OAuth2Config.Exchange(ctx, code)
 }
 
-// VerifyIDToken verifies the ID token from OIDC provider
+// VerifyIDToken verifies the ID token from OIDC provider. The verification
+// path is never chosen from the (untrusted) token header: the standard OIDC
+// verifier runs first, and the HS256 fallback is attempted only when it fails
+// and OIDC_ALLOW_HS256 is enabled.
 func VerifyIDToken(ctx context.Context, rawIDToken string) (IDToken, error) {
-	// Parse the token to check the algorithm
-	parser := jwt.NewParser()
-	token, _, err := parser.ParseUnverified(rawIDToken, jwt.MapClaims{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse token: %w", err)
+	// Standard OIDC verification (signature via JWKS, audience, issuer, expiry).
+	verifyErr := fmt.Errorf("OIDC provider not initialized")
+	if OIDCProvider != nil {
+		verifier := OIDCProvider.Verifier(&oidc.Config{
+			ClientID: config.AppConfig.OIDCClientID,
+		})
+		idToken, err := verifier.Verify(ctx, rawIDToken)
+		if err == nil {
+			return idToken, nil
+		}
+		verifyErr = err
+	}
+	if !config.AppConfig.OIDCAllowHS256 {
+		return nil, fmt.Errorf("ID token verification failed: %w", verifyErr)
 	}
 
-	// Check if it's using HS256
-	if token.Method.Alg() == "HS256" {
-		// Verify HS256 token manually using client secret
-		parsedToken, err := jwt.Parse(rawIDToken, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+	return verifyHS256(rawIDToken, discoveredIssuer())
+}
+
+// discoveredIssuer returns the issuer from the provider's discovery document,
+// falling back to the configured provider URL when discovery is unavailable.
+// This keeps the HS256 issuer check aligned with what the provider actually
+// stamps into tokens (e.g. trailing-slash differences from the config value).
+func discoveredIssuer() string {
+	if OIDCProvider != nil {
+		var claims struct {
+			Issuer string `json:"issuer"`
+		}
+		if err := OIDCProvider.Claims(&claims); err == nil && claims.Issuer != "" {
+			return claims.Issuer
+		}
+	}
+	return config.AppConfig.OIDCProviderURL
+}
+
+// verifyHS256 verifies an HMAC-signed ID token with the client secret. The
+// algorithm is pinned to HS256 in the keyfunc (and via WithValidMethods), and
+// audience, issuer, and expiry are validated to match the OIDC path.
+func verifyHS256(rawIDToken, issuer string) (IDToken, error) {
+	parsedToken, err := jwt.Parse(
+		rawIDToken,
+		func(token *jwt.Token) (interface{}, error) {
+			if token.Method.Alg() != "HS256" {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Method.Alg())
 			}
 			return []byte(config.AppConfig.OIDCClientSecret), nil
-		})
-
-		if err != nil || !parsedToken.Valid {
-			return nil, fmt.Errorf("HS256 token verification failed: %w", err)
-		}
-
-		// Extract claims and create a mock IDToken for compatibility
-		claims, ok := parsedToken.Claims.(jwt.MapClaims)
-		if !ok {
-			return nil, fmt.Errorf("failed to get claims from token")
-		}
-
-		// Convert claims to IDToken
-		claimsJSON, err := json.Marshal(claims)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal claims: %w", err)
-		}
-
-		// Return a mockIDToken that implements the IDToken interface
-		return &mockIDToken{
-			claims: claimsJSON,
-		}, nil
+		},
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithAudience(config.AppConfig.OIDCClientID),
+		jwt.WithIssuer(issuer),
+		jwt.WithExpirationRequired(),
+	)
+	if err != nil || !parsedToken.Valid {
+		return nil, fmt.Errorf("HS256 token verification failed: %w", err)
 	}
 
-	// Use standard OIDC verification for RS256 and other algorithms
-	verifier := OIDCProvider.Verifier(&oidc.Config{
-		ClientID: config.AppConfig.OIDCClientID,
-	})
-	return verifier.Verify(ctx, rawIDToken)
+	claims, ok := parsedToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("failed to get claims from token")
+	}
+
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal claims: %w", err)
+	}
+
+	return &mockIDToken{claims: claimsJSON}, nil
 }
 
 // mockIDToken implements IDToken interface for HS256 tokens

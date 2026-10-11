@@ -90,7 +90,7 @@ func RegisterMachine(c *gin.Context) {
 	}
 
 	// Insert machine
-	result, err := database.DB.Exec(
+	_, err := database.DB.Exec(
 		`INSERT INTO machines (machine_id, serial_number) VALUES (?, ?)
 		 ON CONFLICT(machine_id) DO NOTHING`,
 		input.MachineID, input.SerialNumber,
@@ -101,7 +101,16 @@ func RegisterMachine(c *gin.Context) {
 		return
 	}
 
-	machineID, _ := result.LastInsertId()
+	// LastInsertId is 0 when ON CONFLICT skips the insert, so read the real id.
+	var machineID int64
+	err = database.DB.QueryRow(
+		`SELECT id FROM machines WHERE machine_id = ?`, input.MachineID,
+	).Scan(&machineID)
+	if err != nil {
+		log.Printf("Failed to look up machine id: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register machine"})
+		return
+	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"id":         machineID,

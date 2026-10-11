@@ -4,10 +4,26 @@ import (
 	"crypto/subtle"
 	"krampus/server/config"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
+
+var machineIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+// ValidateMachineID rejects path-traversal and junk machine identifiers on
+// the sync endpoints (Santa sends a hardware UUID).
+func ValidateMachineID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !machineIDPattern.MatchString(c.Param("machine_id")) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid machine id"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
 
 // SantaAuthMiddleware protects the Santa sync endpoints with a shared secret.
 // When SANTA_SYNC_KEY is unset the endpoints stay open (a startup warning is
