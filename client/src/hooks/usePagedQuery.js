@@ -19,11 +19,13 @@ export default function usePagedQuery(path, extraParams = {}) {
 
   // Extra params change outside our setters; flag loading for the refetch
   // using the render-time previous-value comparison pattern from the React
-  // docs, which avoids an extra effect pass.
+  // docs, which avoids an extra effect pass. Reset to page 1 so a filter
+  // applied from a deep page cannot land on a stale, empty offset.
   const [prevExtraKey, setPrevExtraKey] = useState(extraKey);
   if (extraKey !== prevExtraKey) {
     setPrevExtraKey(extraKey);
     setLoading(true);
+    setPageRaw(1);
   }
 
   // Flip loading in the user-invoked setters so the fetch effect never has to

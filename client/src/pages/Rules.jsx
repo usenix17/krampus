@@ -28,6 +28,10 @@ import DataTable from '../components/DataTable';
 const truncate = (value) =>
   value && value.length > 32 ? `${value.slice(0, 32)}...` : value;
 
+// Honor a configured API origin (VITE_API_URL) so export links work in
+// split-origin dev setups; the default '' keeps same-origin behavior.
+const apiBase = apiClient.defaults.baseURL || '';
+
 const Rules = () => {
   const { isAdmin } = useAuth();
   const toast = useToast();
@@ -70,7 +74,7 @@ const Rules = () => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     const qs = params.toString();
-    return `/api/rules/export${qs ? `?${qs}` : ''}`;
+    return `${apiBase}/api/rules/export${qs ? `?${qs}` : ''}`;
   }, [search]);
 
   const handleDelete = async (ruleId) => {

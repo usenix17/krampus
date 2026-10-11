@@ -24,6 +24,10 @@ import DataTable from '../components/DataTable';
 
 // Real agents send prefixed decisions (ALLOW_BINARY, BLOCK_BINARY), so
 // color by prefix rather than exact value.
+// Honor a configured API origin (VITE_API_URL) so export links work in
+// split-origin dev setups; the default '' keeps same-origin behavior.
+const apiBase = apiClient.defaults.baseURL || '';
+
 const getDecisionColor = (decision) => {
   if (decision?.startsWith('ALLOW')) return 'success';
   if (decision?.startsWith('BLOCK')) return 'error';
@@ -124,7 +128,7 @@ const Events = () => {
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     const qs = params.toString();
-    return `/api/events/export${qs ? `?${qs}` : ''}`;
+    return `${apiBase}/api/events/export${qs ? `?${qs}` : ''}`;
   }, [search, machineId, decision, from, to]);
 
   const columns = [

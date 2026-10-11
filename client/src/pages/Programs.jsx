@@ -8,6 +8,10 @@ import usePagedQuery from '../hooks/usePagedQuery';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
 
+// Honor a configured API origin (VITE_API_URL) so export links work in
+// split-origin dev setups; the default '' keeps same-origin behavior.
+const apiBase = apiClient.defaults.baseURL || '';
+
 const Programs = () => {
   const { isAdmin } = useAuth();
   const toast = useToast();
@@ -45,7 +49,7 @@ const Programs = () => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     const qs = params.toString();
-    return `/api/programs/export${qs ? `?${qs}` : ''}`;
+    return `${apiBase}/api/programs/export${qs ? `?${qs}` : ''}`;
   }, [search]);
 
   const columns = [
