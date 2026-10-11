@@ -121,6 +121,7 @@ func main() {
 		rulesGroup := api.Group("/rules")
 		{
 			rulesGroup.GET("", handlers.ListRules)
+			rulesGroup.GET("/export", handlers.ExportRules)
 			rulesGroup.GET("/:id", handlers.GetRule)
 
 			// Admin-only rule routes
@@ -144,12 +145,14 @@ func main() {
 		eventsGroup := api.Group("/events")
 		{
 			eventsGroup.GET("", handlers.ListEvents)
+			eventsGroup.GET("/export", handlers.ExportEvents)
 		}
 
 		// Programs
 		programsGroup := api.Group("/programs")
 		{
 			programsGroup.GET("", handlers.ListPrograms)
+			programsGroup.GET("/export", handlers.ExportPrograms)
 		}
 
 		// Users (admin-only)
